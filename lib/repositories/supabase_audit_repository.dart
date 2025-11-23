@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/checklist_model.dart';
 import 'audit_repository.dart';
@@ -44,7 +45,9 @@ class SupabaseAuditRepository implements AuditRepository {
       'employer_name': audit.employerName,
       'headcount': audit.headcount,
       'date': audit.date.toUtc().toIso8601String(),
+      'pdf_url': audit.pdfUrl,
     }, onConflict: 'id');
+
     // Upsert/update hostels latest_audit_date by hostel name
     if (audit.hostelName.trim().isNotEmpty) {
       final hostelName = audit.hostelName.trim();
@@ -123,29 +126,42 @@ class SupabaseAuditRepository implements AuditRepository {
             .eq('section_id', sectionId)
             .order('position', ascending: true);
 
-        // Upload photos for items that have local imagePath
+        // Upload photos for items that have local imagePaths
         final storage = _db.storage.from('audit-photos');
         for (final row in insertedItems) {
           final pos = (row['position'] as num).toInt();
           final itemId = (row['id'] as num).toInt();
           final item = section.items[pos];
-          final p = item.imagePath;
-          if (p != null && p.isNotEmpty) {
-            try {
-              final file = File(p);
-              if (await file.exists()) {
-                final ext = p.contains('.') ? p.split('.').last : 'jpg';
-                final objectPath =
-                    '$_uid/${audit.id}/sec_${s}_item_${pos}_${DateTime.now().millisecondsSinceEpoch}.$ext';
-                await storage.upload(objectPath, file);
-                final publicUrl = storage.getPublicUrl(objectPath);
-                await _db.from('audit_item_photos').insert({
-                  'item_id': itemId,
-                  'storage_path': publicUrl,
-                });
+          
+          for (int imgIdx = 0; imgIdx < item.imagePaths.length; imgIdx++) {
+            final p = item.imagePaths[imgIdx];
+            if (p.isNotEmpty) {
+              try {
+                // If it's already a network URL, just re-insert the reference
+                if (p.startsWith('http')) {
+                  await _db.from('audit_item_photos').insert({
+                    'item_id': itemId,
+                    'storage_path': p,
+                  });
+                  continue;
+                }
+
+                final file = File(p);
+                if (await file.exists()) {
+                  final ext = p.contains('.') ? p.split('.').last : 'jpg';
+                  final objectPath =
+                      '$_uid/${audit.id}/sec_${s}_item_${pos}_img_${imgIdx}_${DateTime.now().millisecondsSinceEpoch}.$ext';
+                  await storage.upload(objectPath, file);
+                  final publicUrl = storage.getPublicUrl(objectPath);
+                  await _db.from('audit_item_photos').insert({
+                    'item_id': itemId,
+                    'storage_path': publicUrl,
+                  });
+                }
+              } catch (e) {
+                debugPrint('Error uploading photo: $e');
+                // ignore single upload failure
               }
-            } catch (_) {
-              // ignore single upload failure to not block entire save
             }
           }
         }
@@ -158,7 +174,7 @@ class SupabaseAuditRepository implements AuditRepository {
     // Load audit shell
     final aRow = await _db
         .from('audits')
-        .select('id, user_id, hostel_name, employer_name, headcount, date')
+        .select('id, user_id, hostel_name, employer_name, headcount, date, pdf_url')
         .eq('user_id', _uid)
         .eq('id', id)
         .maybeSingle();
@@ -181,9 +197,9 @@ class SupabaseAuditRepository implements AuditRepository {
             .inFilter('section_id', sectionIds)
             .order('position', ascending: true);
 
-    // Get first photo url per item (if any)
+    // Get all photos per item
     final itemIds = itemsRows.map<int>((r) => (r['id'] as num).toInt()).toList();
-    Map<int, String> firstPhotoByItem = {};
+    Map<int, List<String>> photosByItem = {};
     if (itemIds.isNotEmpty) {
       final photos = await _db
           .from('audit_item_photos')
@@ -192,9 +208,7 @@ class SupabaseAuditRepository implements AuditRepository {
           .order('created_at', ascending: true);
       for (final ph in photos) {
         final itemId = (ph['item_id'] as num).toInt();
-        if (!firstPhotoByItem.containsKey(itemId)) {
-          firstPhotoByItem[itemId] = ph['storage_path'] as String;
-        }
+        photosByItem.putIfAbsent(itemId, () => []).add(ph['storage_path'] as String);
       }
     }
 
@@ -216,7 +230,7 @@ class SupabaseAuditRepository implements AuditRepository {
           status: _statusFromDb(ir['status'] as String),
           correctiveAction: ir['corrective_action'] as String? ?? '',
           auditComment: ir['audit_comment'] as String? ?? '',
-          imagePath: firstPhotoByItem[itemId],
+          imagePaths: photosByItem[itemId],
         );
       }).toList();
       sections.add(AuditSection(
@@ -234,6 +248,7 @@ class SupabaseAuditRepository implements AuditRepository {
       employerName: aRow['employer_name'] as String? ?? '',
       headcount: (aRow['headcount'] as num?)?.toInt() ?? 0,
       sections: sections,
+      pdfUrl: aRow['pdf_url'] as String?,
     );
   }
 
@@ -254,6 +269,68 @@ class SupabaseAuditRepository implements AuditRepository {
       );
     }).toList();
   }
+
+  @override
+  Future<List<AuditSection>> getActiveTemplate() async {
+    try {
+      // Load active sections
+      final secRows = await _db
+          .from('template_sections')
+          .select()
+          .eq('is_active', true)
+          .order('position', ascending: true);
+      
+      if (secRows.isEmpty) {
+        // Fallback to hardcoded default if no template in DB
+        return Audit.createDefault().sections;
+      }
+
+      final sections = <AuditSection>[];
+      
+      // Load all items
+      final itemRows = await _db
+          .from('template_items')
+          .select()
+          .order('position', ascending: true);
+      
+      // Group items by section_id
+      final Map<int, List<Map<String, dynamic>>> bySection = {};
+      for (final r in itemRows) {
+        final sid = (r['section_id'] as num).toInt();
+        bySection.putIfAbsent(sid, () => []).add(r);
+      }
+
+      for (final s in secRows) {
+        final sid = (s['id'] as num).toInt();
+        final items = (bySection[sid] ?? []).map((ir) {
+          return AuditItem(
+            nameEn: ir['name_en'] as String,
+            nameMs: ir['name_ms'] as String,
+            status: ItemStatus.missing, // Default status for new audit
+          );
+        }).toList();
+
+        sections.add(AuditSection(
+          nameEn: s['name_en'] as String,
+          nameMs: s['name_ms'] as String,
+          items: items,
+        ));
+      }
+      
+      return sections;
+    } catch (e) {
+      debugPrint('Error fetching template: $e');
+      return Audit.createDefault().sections;
+    }
+  }
+
+  @override
+  Future<void> uploadPdf(String path, Uint8List bytes) async {
+    await _db.storage.from('audit-reports').uploadBinary(path, bytes);
+  }
+
+  @override
+  Future<String> getPdfUrl(String path) async {
+    return _db.storage.from('audit-reports').getPublicUrl(path);
+  }
 }
-
-

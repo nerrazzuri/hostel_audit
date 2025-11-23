@@ -6,7 +6,7 @@ class AuditItem {
   ItemStatus status;
   String correctiveAction;
   String auditComment;
-  String? imagePath;
+  List<String> imagePaths;
 
   AuditItem({
     required this.nameEn,
@@ -14,8 +14,8 @@ class AuditItem {
     this.status = ItemStatus.missing,
     this.correctiveAction = '',
     this.auditComment = '',
-    this.imagePath,
-  });
+    List<String>? imagePaths,
+  }) : imagePaths = imagePaths ?? [];
 
   Map<String, dynamic> toJson() {
     return {
@@ -24,7 +24,7 @@ class AuditItem {
       'status': status.index,
       'correctiveAction': correctiveAction,
       'auditComment': auditComment,
-      'imagePath': imagePath,
+      'imagePaths': imagePaths,
     };
   }
 
@@ -36,7 +36,8 @@ class AuditItem {
       status: ItemStatus.values[json['status']],
       correctiveAction: json['correctiveAction'] ?? '',
       auditComment: json['auditComment'] ?? (json['remarks'] ?? ''),
-      imagePath: json['imagePath'],
+      imagePaths: (json['imagePaths'] as List?)?.map((e) => e as String).toList() ?? 
+                  (json['imagePath'] != null ? [json['imagePath'] as String] : []),
     );
   }
 }
@@ -76,6 +77,8 @@ class Audit {
   final int headcount;
   final List<AuditSection> sections;
 
+  final String? pdfUrl;
+
   Audit({
     required this.id,
     required this.date,
@@ -84,6 +87,7 @@ class Audit {
     this.employerName = '',
     this.headcount = 0,
     required this.sections,
+    this.pdfUrl,
   });
 
   Map<String, dynamic> toJson() {
@@ -95,6 +99,7 @@ class Audit {
       'employerName': employerName,
       'headcount': headcount,
       'sections': sections.map((s) => s.toJson()).toList(),
+      'pdfUrl': pdfUrl,
     };
   }
 
@@ -109,11 +114,12 @@ class Audit {
       sections: (json['sections'] as List)
           .map((s) => AuditSection.fromJson(s))
           .toList(),
+      pdfUrl: json['pdfUrl'],
     );
   }
   
   // Factory to create a fresh audit with default checklist
-  factory Audit.createDefault() {
+  factory Audit.createDefault({List<AuditSection>? sections}) {
     return Audit(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
       date: DateTime.now().toUtc(),
@@ -121,7 +127,7 @@ class Audit {
       hostelName: '',
       employerName: '',
       headcount: 0,
-      sections: _defaultSections(),
+      sections: sections ?? _defaultSections(),
     );
   }
 

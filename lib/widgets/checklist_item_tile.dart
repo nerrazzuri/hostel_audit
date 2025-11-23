@@ -49,15 +49,28 @@ class ChecklistItemTile extends StatelessWidget {
     );
 
     if (image != null) {
+      final newPaths = List<String>.from(item.imagePaths)..add(image.path);
       onChanged(AuditItem(
         nameEn: item.nameEn,
         nameMs: item.nameMs,
         status: item.status,
         correctiveAction: item.correctiveAction,
         auditComment: item.auditComment,
-        imagePath: image.path,
+        imagePaths: newPaths,
       ));
     }
+  }
+
+  void _removeImage(int index) {
+    final newPaths = List<String>.from(item.imagePaths)..removeAt(index);
+    onChanged(AuditItem(
+      nameEn: item.nameEn,
+      nameMs: item.nameMs,
+      status: item.status,
+      correctiveAction: item.correctiveAction,
+      auditComment: item.auditComment,
+      imagePaths: newPaths,
+    ));
   }
 
   @override
@@ -98,7 +111,7 @@ class ChecklistItemTile extends StatelessWidget {
                         status: ItemStatus.good,
                         correctiveAction: '',
                         auditComment: '',
-                        imagePath: item.imagePath,
+                        imagePaths: item.imagePaths,
                       ));
                     },
                   ),
@@ -116,7 +129,7 @@ class ChecklistItemTile extends StatelessWidget {
                         status: ItemStatus.damaged,
                         correctiveAction: item.correctiveAction,
                         auditComment: item.auditComment,
-                        imagePath: item.imagePath,
+                        imagePaths: item.imagePaths,
                       ));
                     },
                   ),
@@ -134,7 +147,7 @@ class ChecklistItemTile extends StatelessWidget {
                         status: ItemStatus.na,
                         correctiveAction: '',
                         auditComment: '',
-                        imagePath: item.imagePath,
+                        imagePaths: item.imagePaths,
                       ));
                     },
                   ),
@@ -157,7 +170,7 @@ class ChecklistItemTile extends StatelessWidget {
                       status: item.status,
                       correctiveAction: val,
                       auditComment: item.auditComment,
-                      imagePath: item.imagePath,
+                      imagePaths: item.imagePaths,
                     ));
                 },
               ),
@@ -176,7 +189,7 @@ class ChecklistItemTile extends StatelessWidget {
                       status: item.status,
                       correctiveAction: item.correctiveAction,
                       auditComment: val,
-                      imagePath: item.imagePath,
+                      imagePaths: item.imagePaths,
                     ));
                 },
               ),
@@ -187,17 +200,47 @@ class ChecklistItemTile extends StatelessWidget {
                 TextButton.icon(
                   onPressed: () => _pickImage(context),
                   icon: const Icon(Icons.camera_alt),
-                  label: Text(item.imagePath == null ? 'Add Photo' : 'Change Photo'),
+                  label: const Text('Add Photo'),
                 ),
-                if (item.imagePath != null) ...[
-                  const SizedBox(width: 12),
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(4),
-                    child: _PreviewImage(path: item.imagePath!),
-                  ),
-                ]
               ],
             ),
+            if (item.imagePaths.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              SizedBox(
+                height: 80,
+                child: ListView.separated(
+                  scrollDirection: Axis.horizontal,
+                  itemCount: item.imagePaths.length,
+                  separatorBuilder: (_, __) => const SizedBox(width: 8),
+                  itemBuilder: (context, index) {
+                    final path = item.imagePaths[index];
+                    return Stack(
+                      children: [
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(4),
+                          child: _PreviewImage(path: path, size: 80),
+                        ),
+                        Positioned(
+                          top: 0,
+                          right: 0,
+                          child: InkWell(
+                            onTap: () => _removeImage(index),
+                            child: Container(
+                              padding: const EdgeInsets.all(2),
+                              decoration: const BoxDecoration(
+                                color: Colors.black54,
+                                shape: BoxShape.circle,
+                              ),
+                              child: const Icon(Icons.close, size: 14, color: Colors.white),
+                            ),
+                          ),
+                        ),
+                      ],
+                    );
+                  },
+                ),
+              ),
+            ],
           ],
         ),
       ),
@@ -207,7 +250,8 @@ class ChecklistItemTile extends StatelessWidget {
 
 class _PreviewImage extends StatelessWidget {
   final String path;
-  const _PreviewImage({required this.path});
+  final double size;
+  const _PreviewImage({required this.path, this.size = 40});
 
   @override
   Widget build(BuildContext context) {
@@ -216,18 +260,18 @@ class _PreviewImage extends StatelessWidget {
     if (isNetwork) {
       return Image.network(
         path,
-        height: 40,
-        width: 40,
+        height: size,
+        width: size,
         fit: BoxFit.cover,
-        errorBuilder: (c, e, s) => const Icon(Icons.broken_image),
+        errorBuilder: (c, e, s) => Icon(Icons.broken_image, size: size),
       );
     }
     return Image.file(
       File(path),
-      height: 40,
-      width: 40,
+      height: size,
+      width: size,
       fit: BoxFit.cover,
-      errorBuilder: (c, e, s) => const Icon(Icons.broken_image),
+      errorBuilder: (c, e, s) => Icon(Icons.broken_image, size: size),
     );
   }
 }

@@ -12,9 +12,19 @@ class AuditProvider extends ChangeNotifier {
   Audit? get currentAudit => _currentAudit;
   bool get isLoading => _isLoading;
 
-  void startNewAudit() {
-    _currentAudit = Audit.createDefault();
+  Future<void> startNewAudit() async {
+    _isLoading = true;
     notifyListeners();
+    try {
+      final sections = await _repository.getActiveTemplate();
+      _currentAudit = Audit.createDefault(sections: sections);
+    } catch (e) {
+      debugPrint('Error starting new audit: $e');
+      _currentAudit = Audit.createDefault(); // Fallback
+    } finally {
+      _isLoading = false;
+      notifyListeners();
+    }
   }
 
   void updateAuditDetails(String auditorName, String hostelName) {
@@ -96,6 +106,30 @@ class AuditProvider extends ChangeNotifier {
     }
   }
 
+  Future<void> uploadPdf(String path, Uint8List bytes) async {
+    await _repository.uploadPdf(path, bytes);
+  }
+
+  Future<String> getPdfUrl(String path) async {
+    return _repository.getPdfUrl(path);
+  }
+  
+  void updatePdfUrl(String url) {
+    if (_currentAudit != null) {
+      _currentAudit = Audit(
+        id: _currentAudit!.id,
+        date: _currentAudit!.date,
+        auditorName: _currentAudit!.auditorName,
+        hostelName: _currentAudit!.hostelName,
+        employerName: _currentAudit!.employerName,
+        headcount: _currentAudit!.headcount,
+        sections: _currentAudit!.sections,
+        pdfUrl: url,
+      );
+      // No notifyListeners needed here as we save immediately after
+    }
+  }
+
   // Testing helper: set all items in the current audit to PASS
   void markAllItemsPass() {
     if (_currentAudit == null) return;
@@ -108,7 +142,7 @@ class AuditProvider extends ChangeNotifier {
           status: ItemStatus.good,
           correctiveAction: '',
           auditComment: it.auditComment,
-          imagePath: it.imagePath,
+          imagePaths: it.imagePaths,
         );
       }
     }

@@ -249,18 +249,26 @@ class _HistoryBody extends StatelessWidget {
     if (user == null) {
       return const Center(child: Text('Login to view your history'));
     }
+    final cutoffDate = DateTime.now().subtract(const Duration(days: 60));
+    
     return FutureBuilder<List<Map<String, dynamic>>>(
       future: client
           .from('audits')
           .select()
           .eq('user_id', user.id)
+          .gte('date', cutoffDate.toIso8601String())
           .order('date', ascending: false),
       builder: (context, snapshot) {
+        if (snapshot.hasError) {
+          return Center(child: Text('Error: ${snapshot.error}'));
+        }
         if (!snapshot.hasData) {
           return const Center(child: CircularProgressIndicator());
         }
         final rows = snapshot.data!;
-        if (rows.isEmpty) return const Center(child: Text('No history yet'));
+        if (rows.isEmpty) {
+          return const Center(child: Text('No history in the last 60 days'));
+        }
         return ListView.builder(
           itemCount: rows.length,
           itemBuilder: (context, i) {

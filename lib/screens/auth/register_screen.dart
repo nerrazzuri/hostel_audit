@@ -56,7 +56,25 @@ class _RegisterScreenState extends State<RegisterScreen> {
       if (res.user == null) {
         throw Exception('Registration failed');
       }
-      if (mounted) Navigator.pop(context);
+      if (mounted) {
+        await showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (ctx) => AlertDialog(
+            title: const Text('Registration Successful'),
+            content: const Text('Email verification has been sent to the registered email address. Please verify your email to log in.'),
+            actions: [
+              TextButton(
+                onPressed: () {
+                  Navigator.pop(ctx); // Close dialog
+                  Navigator.pop(context); // Go back to login
+                },
+                child: const Text('OK'),
+              ),
+            ],
+          ),
+        );
+      }
     } catch (e) {
       setState(() {
         _error = 'Registration failed: ${e.toString().split('\n').first}';

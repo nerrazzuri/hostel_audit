@@ -4,14 +4,29 @@ import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:intl/intl.dart';
 import '../models/checklist_model.dart';
+import 'package:printing/printing.dart';
 
 class PdfService {
   static Future<Uint8List> generateAuditPdf(Audit audit) async {
     final pdf = pw.Document();
     final dateFormat = DateFormat('dd MMM yyyy');
 
-    // Load font if needed, but default is fine for now
-    
+    // Pre-fetch network images
+    final Map<String, pw.ImageProvider> netImages = {};
+    final allImagePaths = audit.sections
+        .expand((s) => s.items)
+        .expand((i) => i.imagePaths)
+        .where((p) => p.startsWith('http'))
+        .toSet();
+
+    for (final path in allImagePaths) {
+      try {
+        netImages[path] = await networkImage(path);
+      } catch (e) {
+        // Ignore failed image loads
+      }
+    }
+
     pdf.addPage(
       pw.MultiPage(
         pageFormat: PdfPageFormat.a4,
@@ -20,7 +35,7 @@ class PdfService {
           return [
             _buildHeader(audit, dateFormat),
             pw.SizedBox(height: 20),
-            ...audit.sections.map((section) => _buildSection(section)),
+            ...audit.sections.map((section) => _buildSection(section, netImages)),
             pw.SizedBox(height: 20),
             _buildFooter(audit),
           ];
@@ -64,7 +79,7 @@ class PdfService {
     );
   }
 
-  static pw.Widget _buildSection(AuditSection section) {
+  static pw.Widget _buildSection(AuditSection section, Map<String, pw.ImageProvider> netImages) {
     return pw.Column(
       crossAxisAlignment: pw.CrossAxisAlignment.start,
       children: [
@@ -98,29 +113,87 @@ class PdfService {
             ];
           }).toList(),
         ),
-        // Add images for this section if any
-        ...section.items.where((i) => i.imagePath != null).map((item) {
-          return pw.Padding(
-            padding: const pw.EdgeInsets.only(top: 8),
-            child: pw.Row(
-              crossAxisAlignment: pw.CrossAxisAlignment.start,
-              children: [
-                pw.Text('Image for ${item.nameEn}: ', style: const pw.TextStyle(fontSize: 10)),
-                pw.SizedBox(width: 10),
-                pw.Container(
-                  height: 100,
-                  width: 100,
-                  child: pw.Image(
-                    pw.MemoryImage(
-                      File(item.imagePath!).readAsBytesSync(),
-                    ),
-                    fit: pw.BoxFit.contain,
+        // Add images table for this section if any
+        if (section.items.any((i) => i.imagePaths.isNotEmpty)) ...[
+          pw.SizedBox(height: 10),
+          pw.Text('Photos:', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 10)),
+          pw.SizedBox(height: 5),
+          pw.Table(
+            border: pw.TableBorder.all(color: PdfColors.grey300),
+            children: [
+              // Header
+              pw.TableRow(
+                decoration: const pw.BoxDecoration(color: PdfColors.grey100),
+                children: [
+                  pw.Padding(
+                    padding: const pw.EdgeInsets.all(5),
+                    child: pw.Text('Item', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 10)),
                   ),
-                ),
-              ],
-            ),
-          );
-        }),
+                  pw.Padding(
+                    padding: const pw.EdgeInsets.all(5),
+                    child: pw.Text('Images', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 10)),
+                  ),
+                ],
+              ),
+              // Rows
+              ...section.items.where((i) => i.imagePaths.isNotEmpty).map((item) {
+                return pw.TableRow(
+                  children: [
+                    pw.Padding(
+                      padding: const pw.EdgeInsets.all(5),
+                      child: pw.Text(item.nameEn, style: const pw.TextStyle(fontSize: 10)),
+                    ),
+                    pw.Padding(
+                      padding: const pw.EdgeInsets.all(5),
+                      child: pw.Wrap(
+                        spacing: 5,
+                        runSpacing: 5,
+                        children: item.imagePaths.map((path) {
+                          // Handle network images
+                          if (path.startsWith('http')) {
+                            final provider = netImages[path];
+                            if (provider != null) {
+                              return pw.Container(
+                                height: 80,
+                                width: 80,
+                                child: pw.Image(
+                                  provider,
+                                  fit: pw.BoxFit.cover,
+                                ),
+                              );
+                            }
+                            // Fallback if load failed
+                            return pw.Container(
+                              width: 80,
+                              height: 80,
+                              color: PdfColors.grey200,
+                              child: pw.Center(child: pw.Text('Img Error', style: const pw.TextStyle(fontSize: 6))),
+                            );
+                          }
+                          
+                          try {
+                            final file = File(path);
+                            if (file.existsSync()) {
+                              return pw.Container(
+                                height: 80, // Fixed height as requested
+                                width: 80,
+                                child: pw.Image(
+                                  pw.MemoryImage(file.readAsBytesSync()),
+                                  fit: pw.BoxFit.cover,
+                                ),
+                              );
+                            }
+                          } catch (_) {}
+                          return pw.SizedBox();
+                        }).toList(),
+                      ),
+                    ),
+                  ],
+                );
+              }),
+            ],
+          ),
+        ],
       ],
     );
   }

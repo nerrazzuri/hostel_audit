@@ -127,9 +127,17 @@ class _QuickActions extends StatelessWidget {
                 icon: Icons.add_circle_outline,
                 label: 'New Audit',
                 color: Theme.of(context).colorScheme.secondary,
-                onTap: () {
-                  context.read<AuditProvider>().startNewAudit();
-                  Navigator.push(context, MaterialPageRoute(builder: (_) => const AuditFormScreen()));
+                onTap: () async {
+                  showDialog(
+                    context: context,
+                    barrierDismissible: false,
+                    builder: (_) => const Center(child: CircularProgressIndicator()),
+                  );
+                  await context.read<AuditProvider>().startNewAudit();
+                  if (context.mounted) {
+                    Navigator.pop(context); // Dismiss loading
+                    Navigator.push(context, MaterialPageRoute(builder: (_) => const AuditFormScreen()));
+                  }
                 },
               ),
             ),
@@ -400,6 +408,8 @@ class _RecentActivity extends StatelessWidget {
 
     if (user == null) return const SizedBox.shrink();
 
+    final cutoffDate = DateTime.now().subtract(const Duration(days: 60));
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -425,9 +435,13 @@ class _RecentActivity extends StatelessWidget {
               .from('audits')
               .select()
               .eq('user_id', user.id)
+              .gte('date', cutoffDate.toIso8601String())
               .order('date', ascending: false)
               .limit(5),
           builder: (context, snapshot) {
+            if (snapshot.hasError) {
+              return Center(child: Text('Error: ${snapshot.error}'));
+            }
             if (!snapshot.hasData) {
               return const Center(child: CircularProgressIndicator());
             }
