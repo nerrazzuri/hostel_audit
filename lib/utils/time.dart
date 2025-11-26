@@ -12,3 +12,10 @@ DateTime utc8MidnightBoundaryUtc() {
   return midnightUtc8.subtract(const Duration(hours: 8));
 }
 
+// Given any calendar date, return the UTC instant representing that day's midnight in UTC+8.
+DateTime utc8MidnightBoundaryUtcFor(DateTime day) {
+  // Treat the provided calendar components as UTC+8 date
+  final midnightUtc8 = DateTime.utc(day.year, day.month, day.day);
+  return midnightUtc8.subtract(const Duration(hours: 8));
+}
+

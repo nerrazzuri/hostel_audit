@@ -10,6 +10,9 @@ import 'audit_form_screen.dart';
 import 'audit_review_screen.dart';
 import 'profile/edit_profile_screen.dart';
 import 'profile/change_password_screen.dart';
+import 'auditor/auditor_hostel_list_screen.dart';
+import 'reports/reports_screen.dart';
+import 'admin/admin_shell.dart';
 
 class MainShell extends StatefulWidget {
   const MainShell({super.key});
@@ -23,9 +26,8 @@ class _MainShellState extends State<MainShell> {
 
   final _pages = const [
     HomeScreen(),        // Dashboard
-    _AuditTab(),         // Audit
-    _HostelsScreen(),    // Hostels
-    _HistoryScreen(),    // History
+    AuditorHostelListScreen(), // Hostels
+    ReportsScreen(),     // Reports (History + Defects)
     _ProfileScreen(),    // Profile
   ];
 
@@ -36,275 +38,17 @@ class _MainShellState extends State<MainShell> {
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _currentIndex,
         onTap: (i) {
-          // Always start a fresh audit when switching to the Audit tab.
-          // Pending/continuation should be entered via Dashboard shortcuts.
-          if (i == 1) {
-            try {
-              context.read<AuditProvider>().startNewAudit();
-            } catch (_) {}
-          }
           setState(() => _currentIndex = i);
         },
         items: const [
           BottomNavigationBarItem(icon: Icon(Icons.dashboard), label: 'Dashboard'),
-          BottomNavigationBarItem(icon: Icon(Icons.assignment), label: 'Audit'),
           BottomNavigationBarItem(icon: Icon(Icons.home_work_outlined), label: 'Hostels'),
-          BottomNavigationBarItem(icon: Icon(Icons.history), label: 'History'),
+          BottomNavigationBarItem(icon: Icon(Icons.assessment_outlined), label: 'Reports'),
           BottomNavigationBarItem(icon: Icon(Icons.person), label: 'Profile'),
         ],
         type: BottomNavigationBarType.fixed,
         selectedItemColor: Colors.indigo,
       ),
-    );
-  }
-}
-
-class _AuditTab extends StatefulWidget {
-  const _AuditTab();
-  @override
-  State<_AuditTab> createState() => _AuditTabState();
-}
-
-class _AuditTabState extends State<_AuditTab> {
-  @override
-  void initState() {
-    super.initState();
-    // Ensure an audit exists when entering the Audit tab
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      final provider = context.read<AuditProvider>();
-      if (provider.currentAudit == null) {
-        provider.startNewAudit();
-      }
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return const AuditFormScreen();
-  }
-}
-
-class _HistoryScreen extends StatelessWidget {
-  const _HistoryScreen();
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('History')),
-      body: _HistoryBody(),
-    );
-  }
-}
-
-class _HostelsScreen extends StatefulWidget {
-  const _HostelsScreen();
-  @override
-  State<_HostelsScreen> createState() => _HostelsScreenState();
-}
-
-class _HostelsScreenState extends State<_HostelsScreen> {
-  Future<List<Map<String, dynamic>>> _loadHostels() async {
-    try {
-      final rows = await Supabase.instance.client.from('hostels').select().order('name', ascending: true);
-      debugPrint('Hostels loaded: ${rows.length}');
-      return List<Map<String, dynamic>>.from(rows);
-    } catch (e, stack) {
-      debugPrint('Error loading hostels: $e\n$stack');
-      return [];
-    }
-  }
-
-  bool _needsAudit(DateTime? lastAudit) {
-    if (lastAudit == null) return true;
-    // Compare using UTC+8
-    final now8 = utc8Now();
-    final last8 = toUtc8(lastAudit);
-    return last8.year != now8.year || last8.month != now8.month;
-  }
-
-  Future<void> _createHostelDialog() async {
-    final nameCtrl = TextEditingController();
-    final employerCtrl = TextEditingController();
-    await showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Add Hostel'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: nameCtrl,
-              decoration: const InputDecoration(labelText: 'Hostel Name'),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: employerCtrl,
-              decoration: const InputDecoration(labelText: 'Employer Name'),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-          ElevatedButton(
-            onPressed: () async {
-              final name = nameCtrl.text.trim();
-              final employer = employerCtrl.text.trim();
-              if (name.isEmpty || employer.isEmpty) return;
-              try {
-                await Supabase.instance.client.from('hostels').insert({
-                  'name': name,
-                  'employer_name': employer,
-                  'created_by': Supabase.instance.client.auth.currentUser?.id,
-                });
-                if (mounted) {
-                  Navigator.pop(ctx);
-                  setState(() {});
-                }
-              } catch (_) {
-                if (mounted) Navigator.pop(ctx);
-              }
-            },
-            child: const Text('Create'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Hostels'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.add),
-            tooltip: 'Add Hostel',
-            onPressed: _createHostelDialog,
-          )
-        ],
-      ),
-      body: FutureBuilder<List<Map<String, dynamic>>>(
-        future: _loadHostels(),
-        builder: (context, snapshot) {
-          if (!snapshot.hasData) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          final rows = snapshot.data!;
-          if (rows.isEmpty) {
-            return const Center(child: Text('No hostels yet. Use + to add one.'));
-          }
-          return ListView.builder(
-            itemCount: rows.length,
-            itemBuilder: (context, i) {
-              final r = rows[i];
-              final name = r['name'] as String? ?? '-';
-              final lastAuditStr = r['latest_audit_date'] as String?;
-              final lastAudit = lastAuditStr != null ? DateTime.tryParse(lastAuditStr) : null;
-              final needsAudit = _needsAudit(lastAudit);
-              final subtitle = lastAudit != null
-                  ? 'Last audited: ${toUtc8(lastAudit).toString().split('.').first} (UTC+8)'
-                  : 'Last audited: -';
-              final chipColor = needsAudit ? Colors.red : Colors.green;
-              final chipText = needsAudit ? 'Needs Audit' : 'Up to Date';
-              return Card(
-                elevation: 3,
-                margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                child: ListTile(
-                  title: Text(name, style: const TextStyle(fontWeight: FontWeight.w600)),
-                  subtitle: Text(subtitle),
-                  trailing: Chip(
-                    label: Text(chipText),
-                    backgroundColor: chipColor.withOpacity(0.15),
-                    labelStyle: TextStyle(color: chipColor),
-                  ),
-                  onTap: () {
-                    if (needsAudit) {
-                      final provider = context.read<AuditProvider>();
-                      if (provider.currentAudit == null) {
-                        provider.startNewAudit();
-                      }
-                      final employer = r['employer_name'] as String? ?? '';
-                      final headcount = (r['headcount'] as num?)?.toInt() ?? 0;
-                      provider.updateHostelName(name);
-                      provider.updateEmployerInfo(employer, headcount);
-                      Navigator.push(context, MaterialPageRoute(builder: (_) => const AuditFormScreen()));
-                    }
-                  },
-                ),
-              );
-            },
-          );
-        },
-      ),
-    );
-  }
-}
-
-class _HistoryBody extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    final client = Supabase.instance.client;
-    final user = client.auth.currentUser;
-    if (user == null) {
-      return const Center(child: Text('Login to view your history'));
-    }
-    final cutoffDate = DateTime.now().subtract(const Duration(days: 60));
-    
-    return FutureBuilder<List<Map<String, dynamic>>>(
-      future: client
-          .from('audits')
-          .select()
-          .eq('user_id', user.id)
-          .gte('date', cutoffDate.toIso8601String())
-          .order('date', ascending: false),
-      builder: (context, snapshot) {
-        if (snapshot.hasError) {
-          return Center(child: Text('Error: ${snapshot.error}'));
-        }
-        if (!snapshot.hasData) {
-          return const Center(child: CircularProgressIndicator());
-        }
-        final rows = snapshot.data!;
-        if (rows.isEmpty) {
-          return const Center(child: Text('No history in the last 60 days'));
-        }
-        return ListView.builder(
-          itemCount: rows.length,
-          itemBuilder: (context, i) {
-            final hostel = rows[i]['hostel_name'] as String? ?? '';
-            final dateStr = rows[i]['date'] as String? ?? '';
-            String dateDisp = dateStr;
-            try {
-              final d = DateTime.parse(dateStr);
-              dateDisp = '${toUtc8(d).toString().split('.').first} (UTC+8)';
-            } catch (_) {}
-            return ListTile(
-              title: Text(hostel),
-              subtitle: Text(dateDisp),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () async {
-                final id = rows[i]['id'] as String;
-                final provider = context.read<AuditProvider>();
-                
-                // Show loading
-                showDialog(
-                  context: context,
-                  barrierDismissible: false,
-                  builder: (_) => const Center(child: CircularProgressIndicator()),
-                );
-                
-                await provider.loadAudit(id);
-                
-                if (context.mounted) {
-                  Navigator.pop(context); // Dismiss loading
-                  Navigator.push(context, MaterialPageRoute(builder: (_) => const AuditReviewScreen(readOnly: true)));
-                }
-              },
-            );
-          },
-        );
-      },
     );
   }
 }
@@ -317,11 +61,13 @@ class _ProfileScreen extends StatefulWidget {
 
 class _ProfileScreenState extends State<_ProfileScreen> {
   String _appVersion = '';
+  bool _isAdmin = false;
 
   @override
   void initState() {
     super.initState();
     _loadVersion();
+    _detectAdmin();
   }
 
   Future<void> _loadVersion() async {
@@ -334,6 +80,31 @@ class _ProfileScreenState extends State<_ProfileScreen> {
       setState(() {
         _appVersion = 'v1.0.0';
       });
+    }
+  }
+
+  Future<void> _detectAdmin() async {
+    try {
+      final client = Supabase.instance.client;
+      final user = client.auth.currentUser;
+      if (user == null) return;
+      // First, check JWT/user metadata
+      final metaRole = (user.appMetadata['role'] as String?) ?? (user.userMetadata?['role'] as String?);
+      if (metaRole == 'admin') {
+        setState(() => _isAdmin = true);
+        return;
+      }
+      // Fallback: check profiles table
+      final row = await client
+          .from('profiles')
+          .select('role')
+          .eq('id', user.id)
+          .maybeSingle();
+      if (row != null && (row['role'] as String?) == 'admin') {
+        setState(() => _isAdmin = true);
+      }
+    } catch (_) {
+      // ignore
     }
   }
 
@@ -475,6 +246,19 @@ class _ProfileScreenState extends State<_ProfileScreen> {
                             Navigator.push(context, MaterialPageRoute(builder: (_) => const ChangePasswordScreen()));
                           },
                         ),
+                        if (_isAdmin) ...[
+                          const Divider(height: 1, indent: 56),
+                          _buildProfileTile(
+                            icon: Icons.admin_panel_settings,
+                            title: 'Switch to Admin Panel',
+                            onTap: () {
+                              Navigator.pushReplacement(
+                                context,
+                                MaterialPageRoute(builder: (_) => const AdminShell()),
+                              );
+                            },
+                          ),
+                        ],
                         // Notifications removed as per latest requirement
                       ],
                     ),

@@ -1,9 +1,13 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:provider/provider.dart';
 import '../models/checklist_model.dart';
+import '../providers/audit_provider.dart';
+import '../services/watermark_service.dart';
+import '../services/location_service.dart';
 
-class ChecklistItemTile extends StatelessWidget {
+class ChecklistItemTile extends StatefulWidget {
   final AuditItem item;
   final Function(AuditItem) onChanged;
   final bool showMalay;
@@ -14,6 +18,43 @@ class ChecklistItemTile extends StatelessWidget {
     required this.onChanged,
     this.showMalay = true,
   });
+
+  @override
+  State<ChecklistItemTile> createState() => _ChecklistItemTileState();
+}
+
+class _ChecklistItemTileState extends State<ChecklistItemTile> {
+  late TextEditingController _actionController;
+  late TextEditingController _commentController;
+
+  @override
+  void initState() {
+    super.initState();
+    _actionController = TextEditingController(text: widget.item.correctiveAction);
+    _commentController = TextEditingController(text: widget.item.auditComment);
+  }
+
+  @override
+  void didUpdateWidget(covariant ChecklistItemTile oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.item.correctiveAction != _actionController.text) {
+      _actionController.text = widget.item.correctiveAction;
+      _actionController.selection = TextSelection.fromPosition(
+          TextPosition(offset: _actionController.text.length));
+    }
+    if (widget.item.auditComment != _commentController.text) {
+      _commentController.text = widget.item.auditComment;
+      _commentController.selection = TextSelection.fromPosition(
+          TextPosition(offset: _commentController.text.length));
+    }
+  }
+
+  @override
+  void dispose() {
+    _actionController.dispose();
+    _commentController.dispose();
+    super.dispose();
+  }
 
   Future<void> _pickImage(BuildContext context) async {
     final picker = ImagePicker();
@@ -49,26 +90,54 @@ class ChecklistItemTile extends StatelessWidget {
     );
 
     if (image != null) {
-      final newPaths = List<String>.from(item.imagePaths)..add(image.path);
-      onChanged(AuditItem(
-        nameEn: item.nameEn,
-        nameMs: item.nameMs,
-        status: item.status,
-        correctiveAction: item.correctiveAction,
-        auditComment: item.auditComment,
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Fetching location and watermarking...')),
+        );
+      }
+
+      // Apply watermark
+      final provider = context.read<AuditProvider>();
+      final audit = provider.currentAudit;
+      
+      String location = 'Unknown Location';
+      if (audit != null) {
+        location = audit.hostelName;
+        if (audit.unitName.isNotEmpty) {
+          location += ' - ${audit.unitName}';
+        }
+      }
+
+      final gpsLocation = await LocationService.getCurrentLocation();
+      final file = File(image.path);
+      await WatermarkService.watermarkImage(file, location, gpsLocation: gpsLocation);
+
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      }
+
+      final newPaths = List<String>.from(widget.item.imagePaths)..add(image.path);
+      widget.onChanged(AuditItem(
+        id: widget.item.id,
+        nameEn: widget.item.nameEn,
+        nameMs: widget.item.nameMs,
+        status: widget.item.status,
+        correctiveAction: widget.item.correctiveAction,
+        auditComment: widget.item.auditComment,
         imagePaths: newPaths,
       ));
     }
   }
 
   void _removeImage(int index) {
-    final newPaths = List<String>.from(item.imagePaths)..removeAt(index);
-    onChanged(AuditItem(
-      nameEn: item.nameEn,
-      nameMs: item.nameMs,
-      status: item.status,
-      correctiveAction: item.correctiveAction,
-      auditComment: item.auditComment,
+    final newPaths = List<String>.from(widget.item.imagePaths)..removeAt(index);
+    widget.onChanged(AuditItem(
+      id: widget.item.id,
+      nameEn: widget.item.nameEn,
+      nameMs: widget.item.nameMs,
+      status: widget.item.status,
+      correctiveAction: widget.item.correctiveAction,
+      auditComment: widget.item.auditComment,
       imagePaths: newPaths,
     ));
   }
@@ -88,7 +157,7 @@ class ChecklistItemTile extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        showMalay ? item.nameMs : item.nameEn,
+                        widget.showMalay ? widget.item.nameMs : widget.item.nameEn,
                         style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
                       ),
                     ],
@@ -102,16 +171,17 @@ class ChecklistItemTile extends StatelessWidget {
                 Expanded(
                   child: _SegmentButton(
                     label: 'PASS',
-                    active: item.status == ItemStatus.good,
+                    active: widget.item.status == ItemStatus.good,
                     activeColor: Colors.green,
                     onTap: () {
-                      onChanged(AuditItem(
-                        nameEn: item.nameEn,
-                        nameMs: item.nameMs,
+                      widget.onChanged(AuditItem(
+                        id: widget.item.id,
+                        nameEn: widget.item.nameEn,
+                        nameMs: widget.item.nameMs,
                         status: ItemStatus.good,
                         correctiveAction: '',
                         auditComment: '',
-                        imagePaths: item.imagePaths,
+                        imagePaths: widget.item.imagePaths,
                       ));
                     },
                   ),
@@ -120,16 +190,17 @@ class ChecklistItemTile extends StatelessWidget {
                 Expanded(
                   child: _SegmentButton(
                     label: 'FAIL',
-                    active: item.status == ItemStatus.damaged,
+                    active: widget.item.status == ItemStatus.damaged,
                     activeColor: Colors.red,
                     onTap: () {
-                      onChanged(AuditItem(
-                        nameEn: item.nameEn,
-                        nameMs: item.nameMs,
+                      widget.onChanged(AuditItem(
+                        id: widget.item.id,
+                        nameEn: widget.item.nameEn,
+                        nameMs: widget.item.nameMs,
                         status: ItemStatus.damaged,
-                        correctiveAction: item.correctiveAction,
-                        auditComment: item.auditComment,
-                        imagePaths: item.imagePaths,
+                        correctiveAction: widget.item.correctiveAction,
+                        auditComment: widget.item.auditComment,
+                        imagePaths: widget.item.imagePaths,
                       ));
                     },
                   ),
@@ -138,16 +209,17 @@ class ChecklistItemTile extends StatelessWidget {
                 Expanded(
                   child: _SegmentButton(
                     label: 'N/A',
-                    active: item.status == ItemStatus.na,
+                    active: widget.item.status == ItemStatus.na,
                     activeColor: Colors.grey,
                     onTap: () {
-                      onChanged(AuditItem(
-                        nameEn: item.nameEn,
-                        nameMs: item.nameMs,
+                      widget.onChanged(AuditItem(
+                        id: widget.item.id,
+                        nameEn: widget.item.nameEn,
+                        nameMs: widget.item.nameMs,
                         status: ItemStatus.na,
                         correctiveAction: '',
                         auditComment: '',
-                        imagePaths: item.imagePaths,
+                        imagePaths: widget.item.imagePaths,
                       ));
                     },
                   ),
@@ -155,22 +227,23 @@ class ChecklistItemTile extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 8),
-            if (item.status == ItemStatus.damaged) ...[
+            if (widget.item.status == ItemStatus.damaged) ...[
               TextField(
                 decoration: const InputDecoration(
                   labelText: 'Defect Details / Corrective Action (Mandatory)',
                   isDense: true,
                 ),
-                controller: TextEditingController(text: item.correctiveAction),
+                controller: _actionController,
                 maxLines: 3,
                 onChanged: (val) {
-                   onChanged(AuditItem(
-                      nameEn: item.nameEn,
-                      nameMs: item.nameMs,
-                      status: item.status,
+                   widget.onChanged(AuditItem(
+                      id: widget.item.id,
+                      nameEn: widget.item.nameEn,
+                      nameMs: widget.item.nameMs,
+                      status: widget.item.status,
                       correctiveAction: val,
-                      auditComment: item.auditComment,
-                      imagePaths: item.imagePaths,
+                      auditComment: widget.item.auditComment,
+                      imagePaths: widget.item.imagePaths,
                     ));
                 },
               ),
@@ -180,16 +253,17 @@ class ChecklistItemTile extends StatelessWidget {
                   labelText: 'Audit Comment',
                   isDense: true,
                 ),
-                controller: TextEditingController(text: item.auditComment),
+                controller: _commentController,
                 maxLines: 3,
                 onChanged: (val) {
-                   onChanged(AuditItem(
-                      nameEn: item.nameEn,
-                      nameMs: item.nameMs,
-                      status: item.status,
-                      correctiveAction: item.correctiveAction,
+                   widget.onChanged(AuditItem(
+                      id: widget.item.id,
+                      nameEn: widget.item.nameEn,
+                      nameMs: widget.item.nameMs,
+                      status: widget.item.status,
+                      correctiveAction: widget.item.correctiveAction,
                       auditComment: val,
-                      imagePaths: item.imagePaths,
+                      imagePaths: widget.item.imagePaths,
                     ));
                 },
               ),
@@ -204,21 +278,59 @@ class ChecklistItemTile extends StatelessWidget {
                 ),
               ],
             ),
-            if (item.imagePaths.isNotEmpty) ...[
+            if (widget.item.imagePaths.isNotEmpty) ...[
               const SizedBox(height: 8),
               SizedBox(
                 height: 80,
                 child: ListView.separated(
                   scrollDirection: Axis.horizontal,
-                  itemCount: item.imagePaths.length,
+                  itemCount: widget.item.imagePaths.length,
                   separatorBuilder: (_, __) => const SizedBox(width: 8),
                   itemBuilder: (context, index) {
-                    final path = item.imagePaths[index];
+                    final path = widget.item.imagePaths[index];
                     return Stack(
                       children: [
-                        ClipRRect(
-                          borderRadius: BorderRadius.circular(4),
-                          child: _PreviewImage(path: path, size: 80),
+                        GestureDetector(
+                          onTap: () {
+                            showDialog(
+                              context: context,
+                              builder: (context) => Dialog(
+                                backgroundColor: Colors.black,
+                                insetPadding: EdgeInsets.zero,
+                                child: Stack(
+                                  children: [
+                                    InteractiveViewer(
+                                      child: Center(
+                                        child: path.startsWith('http')
+                                            ? Image.network(
+                                                path,
+                                                fit: BoxFit.contain,
+                                                errorBuilder: (c, e, s) => const Icon(Icons.broken_image, color: Colors.white),
+                                              )
+                                            : Image.file(
+                                                File(path),
+                                                fit: BoxFit.contain,
+                                                errorBuilder: (c, e, s) => const Icon(Icons.broken_image, color: Colors.white),
+                                              ),
+                                      ),
+                                    ),
+                                    Positioned(
+                                      top: 40,
+                                      right: 20,
+                                      child: IconButton(
+                                        icon: const Icon(Icons.close, color: Colors.white, size: 30),
+                                        onPressed: () => Navigator.pop(context),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            );
+                          },
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(4),
+                            child: _PreviewImage(path: path, size: 80),
+                          ),
                         ),
                         Positioned(
                           top: 0,
@@ -293,38 +405,43 @@ class _SegmentButton extends StatelessWidget {
   Widget build(BuildContext context) {
     final bg = active ? activeColor : Colors.grey.shade200;
     final fg = active ? Colors.white : Colors.grey.shade800;
-    return InkWell(
-      onTap: onTap,
-      child: Row(
-        mainAxisSize: MainAxisSize.max,
-        children: [
-          Expanded(
-            child: Container(
-              padding: const EdgeInsets.symmetric(vertical: 10),
-              decoration: BoxDecoration(
-                color: bg,
-                borderRadius: BorderRadius.circular(10),
-                boxShadow: active
-                    ? [
-                        BoxShadow(
-                          color: activeColor.withOpacity(0.25),
-                          blurRadius: 8,
-                          offset: const Offset(0, 2),
-                        )
-                      ]
-                    : null,
-              ),
-              alignment: Alignment.center,
-              child: Text(
-                label,
-                style: TextStyle(
-                  color: fg,
-                  fontWeight: FontWeight.bold,
+    return Semantics(
+      button: true,
+      label: label,
+      selected: active,
+      child: InkWell(
+        onTap: onTap,
+        child: Row(
+          mainAxisSize: MainAxisSize.max,
+          children: [
+            Expanded(
+              child: Container(
+                padding: const EdgeInsets.symmetric(vertical: 14), // larger tap target
+                decoration: BoxDecoration(
+                  color: bg,
+                  borderRadius: BorderRadius.circular(10),
+                  boxShadow: active
+                      ? [
+                          BoxShadow(
+                            color: activeColor.withOpacity(0.25),
+                            blurRadius: 8,
+                            offset: const Offset(0, 2),
+                          )
+                        ]
+                      : null,
+                ),
+                alignment: Alignment.center,
+                child: Text(
+                  label,
+                  style: TextStyle(
+                    color: fg,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

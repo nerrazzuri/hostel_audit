@@ -1,3 +1,5 @@
+import 'dart:io';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/audit_provider.dart';
@@ -5,6 +7,8 @@ import '../models/checklist_model.dart';
 import '../services/pdf_service.dart';
 import 'package:printing/printing.dart';
 import 'package:pdf/pdf.dart';
+import 'auditor/auditor_hostel_list_screen.dart';
+import 'pdf_preview_screen.dart';
 
 class AuditReviewScreen extends StatelessWidget {
   final bool readOnly;
@@ -56,6 +60,13 @@ class AuditReviewScreen extends StatelessWidget {
                 audit.hostelName.isEmpty ? 'Hostel: (not set)' : 'Hostel: ${audit.hostelName}',
                 style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
               ),
+              if (audit.unitName.isNotEmpty) ...[
+                const SizedBox(height: 4),
+                Text(
+                  'Unit: ${audit.unitName}',
+                  style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w500, color: Colors.black87),
+                ),
+              ],
               const SizedBox(height: 12),
               ...audit.sections.map((s) {
                 return Card(
@@ -114,7 +125,14 @@ class AuditReviewScreen extends StatelessWidget {
                                           borderRadius: BorderRadius.circular(4),
                                           child: isNetwork
                                               ? Image.network(path, height: 60, width: 60, fit: BoxFit.cover)
-                                              : Image.asset('assets/placeholder.png', height: 60, width: 60), // Fallback for local file in review if needed, but usually we review after save or local path
+                                              : File(path).existsSync()
+                                                  ? Image.file(File(path), height: 60, width: 60, fit: BoxFit.cover)
+                                                  : Container(
+                                                      height: 60,
+                                                      width: 60,
+                                                      color: Colors.grey[200],
+                                                      child: const Icon(Icons.image_not_supported, color: Colors.grey),
+                                                    ),
                                         );
                                       },
                                     ),
@@ -143,48 +161,104 @@ class AuditReviewScreen extends StatelessWidget {
                       ? null
                       : () async {
                           if (!readOnly) {
+                            // --- SAVE & GENERATE FLOW ---
                             try {
-                              // 1. Generate PDF
-                              final pdfData = await PdfService.generateAuditPdf(audit);
-                              
-                              // 2. Upload PDF
-                              String? pdfUrl;
-                              try {
-                                final filename = '${audit.id}_${DateTime.now().millisecondsSinceEpoch}.pdf';
-                                final path = '${provider.currentAudit!.id}/$filename'; // Use audit ID as folder
-                                await context.read<AuditProvider>().uploadPdf(path, pdfData);
-                                pdfUrl = await context.read<AuditProvider>().getPdfUrl(path);
-                              } catch (e) {
-                                debugPrint('Error uploading PDF: $e');
-                                // Continue saving even if PDF upload fails, but maybe warn user?
-                              }
-
-                              // 3. Update audit with PDF URL
-                              if (pdfUrl != null) {
-                                provider.updatePdfUrl(pdfUrl);
-                              }
-
-                              // 4. Save Audit
+                              // 1. Save Audit First (Important!)
                               await provider.saveCurrentAudit();
                               
-                              // 5. Open PDF for viewing/printing
-                              await Printing.layoutPdf(onLayout: (PdfPageFormat format) async => pdfData);
-
                               if (context.mounted) {
-                                Navigator.pop(context);
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text('Audit saved! Generating PDF...')),
+                                );
                               }
+
+                              // 2. Generate PDF (await)
+                              Uint8List? pdfData;
+                              try {
+                                pdfData = await PdfService.generateAuditPdf(audit);
+                              } catch (e) {
+                                debugPrint('PDF generation failed: $e');
+                              }
+
+                              // 3. Start upload in background (do not block UI)
+                              // After upload/save completes, offer navigation choice to user.
+                              () async {
+                                try {
+                                  if (pdfData != null) {
+                                    final filename = '${audit.id}_${DateTime.now().millisecondsSinceEpoch}.pdf';
+                                    final path = '${audit.id}/$filename'; 
+                                    await provider.uploadPdf(path, pdfData);
+                                    final pdfUrl = await provider.getPdfUrl(path);
+                                    if (pdfUrl.isNotEmpty) {
+                                      provider.updatePdfUrl(pdfUrl);
+                                      await provider.saveCurrentAudit(); // Save again with URL
+                                    }
+                                  }
+                                  if (context.mounted) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                        content: const Text('PDF uploaded.'),
+                                        action: SnackBarAction(
+                                          label: 'Back to Hostels',
+                                          onPressed: () {
+                                            Navigator.of(context).pushAndRemoveUntil(
+                                              MaterialPageRoute(builder: (_) => const AuditorHostelListScreen()),
+                                              (route) => false,
+                                            );
+                                          },
+                                        ),
+                                      ),
+                                    );
+                                  }
+                                } catch (e) {
+                                  debugPrint('PDF upload/save failed: $e');
+                                }
+                              }();
+
+                              // 4. Show PDF Preview with Back (to audit items page)
+                              if (pdfData != null && context.mounted) {
+                                final outerContext = context;
+                                await Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => PdfPreviewScreen(
+                                      pdfData: pdfData!,
+                                      onBack: () {
+                                        // Pop preview then review to return to audit items page
+                                        Navigator.pop(outerContext);
+                                        Navigator.pop(outerContext);
+                                      },
+                                    ),
+                                  ),
+                                );
+                              }
+                              
                             } catch (e) {
                               if (context.mounted) {
                                 ScaffoldMessenger.of(context).showSnackBar(
                                   SnackBar(content: Text('Save failed: $e')),
                                 );
                               }
-                              return;
                             }
                           } else {
-                             // Read-only mode: just generate and show
-                             final pdfData = await PdfService.generateAuditPdf(audit);
-                             await Printing.layoutPdf(onLayout: (PdfPageFormat format) async => pdfData);
+                             // --- READ ONLY / HISTORY FLOW ---
+                             // Just generate and show. 
+                             // Non-blocking: Show snackbar, then open.
+                             ScaffoldMessenger.of(context).showSnackBar(
+                               const SnackBar(content: Text('Generating PDF... You can continue using the app.')),
+                             );
+                             
+                             // We don't pop here, user stays on screen or leaves.
+                             try {
+                               final pdfData = await PdfService.generateAuditPdf(audit);
+                               await Printing.layoutPdf(onLayout: (PdfPageFormat format) async => pdfData);
+                             } catch (e) {
+                               if (context.mounted) {
+                                 ScaffoldMessenger.of(context).showSnackBar(
+                                   SnackBar(content: Text('PDF Generation failed: $e')),
+                                 );
+                               }
+                             }
                           }
                         },
                   style: ElevatedButton.styleFrom(
@@ -204,7 +278,7 @@ class AuditReviewScreen extends StatelessWidget {
                             strokeWidth: 2.5,
                           ),
                         )
-                      : Text(readOnly ? 'Generate PDF' : 'Confirm & Generate PDF'),
+                      : Text(readOnly ? 'Generate PDF' : 'Save & Generate PDF'),
                 ),
               ),
             ),

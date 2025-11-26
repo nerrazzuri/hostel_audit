@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../providers/audit_provider.dart';
 import 'audit_form_screen.dart';
+import 'auditor/auditor_hostel_list_screen.dart';
 import '../utils/time.dart';
 import 'audit_review_screen.dart';
 
@@ -11,8 +12,13 @@ class HomeScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final client = Supabase.instance.client;
-    final user = client.auth.currentUser;
+    SupabaseClient? client;
+    try {
+      client = Supabase.instance.client;
+    } catch (_) {
+      client = null;
+    }
+    final user = client?.auth.currentUser;
     final name = (user?.userMetadata?['name'] as String?) ?? 'Auditor';
 
     return Scaffold(
@@ -52,6 +58,71 @@ class _DashboardHeader extends StatelessWidget {
       floating: false,
       pinned: true,
       backgroundColor: Theme.of(context).primaryColor,
+      actions: [
+        Consumer<AuditProvider>(
+          builder: (context, provider, child) {
+            return FutureBuilder<int>(
+              future: provider.getPendingSyncCount(),
+              builder: (context, snapshot) {
+                final count = snapshot.data ?? 0;
+                return IconButton(
+                  icon: Stack(
+                    children: [
+                      const Icon(Icons.sync),
+                      if (count > 0)
+                        Positioned(
+                          right: 0,
+                          top: 0,
+                          child: Container(
+                            padding: const EdgeInsets.all(2),
+                            decoration: const BoxDecoration(
+                              color: Colors.red,
+                              shape: BoxShape.circle,
+                            ),
+                            constraints: const BoxConstraints(
+                              minWidth: 12,
+                              minHeight: 12,
+                            ),
+                            child: Text(
+                              '$count',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 8,
+                                fontWeight: FontWeight.bold,
+                              ),
+                              textAlign: TextAlign.center,
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                  tooltip: 'Sync Pending Audits',
+                  onPressed: () async {
+                    if (count == 0) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('No pending audits to sync.')),
+                      );
+                      return;
+                    }
+                    
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Syncing audits...')),
+                    );
+                    
+                    await provider.syncAudits();
+                    
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Sync complete!')),
+                      );
+                    }
+                  },
+                );
+              },
+            );
+          },
+        ),
+      ],
       flexibleSpace: FlexibleSpaceBar(
         background: Container(
           decoration: BoxDecoration(
@@ -113,104 +184,25 @@ class _QuickActions extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         const Text(
           'Quick Actions',
           style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
         ),
         const SizedBox(height: 12),
-        Row(
-          children: [
-            Expanded(
-              child: _ActionButton(
-                icon: Icons.add_circle_outline,
-                label: 'New Audit',
-                color: Theme.of(context).colorScheme.secondary,
-                onTap: () async {
-                  showDialog(
-                    context: context,
-                    barrierDismissible: false,
-                    builder: (_) => const Center(child: CircularProgressIndicator()),
-                  );
-                  await context.read<AuditProvider>().startNewAudit();
-                  if (context.mounted) {
-                    Navigator.pop(context); // Dismiss loading
-                    Navigator.push(context, MaterialPageRoute(builder: (_) => const AuditFormScreen()));
-                  }
-                },
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: _ActionButton(
-                icon: Icons.domain_add,
-                label: 'Add Hostel',
-                color: Colors.orange,
-                onTap: () {
-                  // Trigger the Add Hostel dialog from the Hostels tab logic
-                  // Since we can't easily access the private _HostelsScreenState,
-                  // we might need to refactor or just navigate to Hostels tab.
-                  // For now, let's simulate a tap on the Hostels tab or show a dialog here.
-                  // A simple way is to show a dialog directly here similar to HostelsScreen.
-                  _createHostelDialog(context);
-                },
-              ),
-            ),
-          ],
+        _ActionButton(
+          icon: Icons.apartment,
+          label: 'Browse Hostels',
+          color: Theme.of(context).colorScheme.secondary,
+          onTap: () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const AuditorHostelListScreen()),
+            );
+          },
         ),
       ],
-    );
-  }
-
-  Future<void> _createHostelDialog(BuildContext context) async {
-    final nameCtrl = TextEditingController();
-    final employerCtrl = TextEditingController();
-    await showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Add Hostel'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: nameCtrl,
-              decoration: const InputDecoration(labelText: 'Hostel Name'),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: employerCtrl,
-              decoration: const InputDecoration(labelText: 'Employer Name'),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-          ElevatedButton(
-            onPressed: () async {
-              final name = nameCtrl.text.trim();
-              final employer = employerCtrl.text.trim();
-              if (name.isEmpty || employer.isEmpty) return;
-              try {
-                await Supabase.instance.client.from('hostels').insert({
-                  'name': name,
-                  'employer_name': employer,
-                  'created_by': Supabase.instance.client.auth.currentUser?.id,
-                });
-                if (context.mounted) {
-                  Navigator.pop(ctx);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Hostel added successfully')),
-                  );
-                }
-              } catch (_) {
-                if (context.mounted) Navigator.pop(ctx);
-              }
-            },
-            child: const Text('Create'),
-          ),
-        ],
-      ),
     );
   }
 }
@@ -260,8 +252,13 @@ class _StatsOverview extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final client = Supabase.instance.client;
-    final user = client.auth.currentUser;
+    SupabaseClient? client;
+    try {
+      client = Supabase.instance.client;
+    } catch (_) {
+      client = null;
+    }
+    final user = client?.auth.currentUser;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -278,7 +275,7 @@ class _StatsOverview extends StatelessWidget {
                 title: 'Audited Today',
                 valueFuture: () async {
                   try {
-                    if (user == null) return 0;
+                    if (user == null || client == null) return 0;
                     final boundaryUtc = utc8MidnightBoundaryUtc();
                     final rows = await client
                         .from('audits')
@@ -300,7 +297,7 @@ class _StatsOverview extends StatelessWidget {
                 title: 'Total Audits',
                 valueFuture: () async {
                   try {
-                    if (user == null) return 0;
+                    if (user == null || client == null) return 0;
                     final count = await client
                         .from('audits')
                         .count(CountOption.exact)
@@ -403,8 +400,13 @@ class _RecentActivity extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final client = Supabase.instance.client;
-    final user = client.auth.currentUser;
+    SupabaseClient? client;
+    try {
+      client = Supabase.instance.client;
+    } catch (_) {
+      client = null;
+    }
+    final user = client?.auth.currentUser;
 
     if (user == null) return const SizedBox.shrink();
 
@@ -431,13 +433,15 @@ class _RecentActivity extends StatelessWidget {
         ),
         const SizedBox(height: 8),
         FutureBuilder<List<Map<String, dynamic>>>(
-          future: client
-              .from('audits')
-              .select()
-              .eq('user_id', user.id)
-              .gte('date', cutoffDate.toIso8601String())
-              .order('date', ascending: false)
-              .limit(5),
+          future: client == null
+              ? Future.value(<Map<String, dynamic>>[])
+              : client
+                  .from('audits')
+                  .select()
+                  .eq('user_id', user.id)
+                  .gte('date', cutoffDate.toIso8601String())
+                  .order('date', ascending: false)
+                  .limit(5),
           builder: (context, snapshot) {
             if (snapshot.hasError) {
               return Center(child: Text('Error: ${snapshot.error}'));

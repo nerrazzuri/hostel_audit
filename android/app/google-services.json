@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "466454291182",
+    "project_id": "hostelaudit-c42d4",
+    "storage_bucket": "hostelaudit-c42d4.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:466454291182:android:bb0f1cdaa52f84e2b2c9ff",
+        "android_client_info": {
+          "package_name": "com.example.hostel_audit_app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCVBq1vR78wLKNM9w7onS5mnMeQKIUxz2U"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

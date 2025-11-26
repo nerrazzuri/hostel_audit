@@ -4,6 +4,7 @@ import '../main_shell.dart';
 import 'login_screen.dart';
 
 import '../admin/admin_shell.dart';
+import 'role_choice_screen.dart';
 
 class AuthGate extends StatelessWidget {
   const AuthGate({super.key});
@@ -30,12 +31,15 @@ class AuthGate extends StatelessWidget {
               return const Scaffold(body: Center(child: CircularProgressIndicator()));
             }
             final profile = profileSnapshot.data;
-            final role = profile?['role'] as String? ?? 'auditor';
+            // Fallback to user metadata role if profile row missing
+            final metaRole = session.user.userMetadata?['role'] as String?;
+            final role = (profile?['role'] as String?) ?? metaRole ?? 'auditor';
             
             if (role == 'admin') {
-              return const AdminShell();
+              return const RoleChoiceScreen();
+            } else {
+              return const MainShell();
             }
-            return const MainShell();
           },
         );
       },

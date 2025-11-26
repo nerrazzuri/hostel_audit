@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../models/template_model.dart';
+import '../../utils/ui.dart';
 
 class TemplateEditorScreen extends StatefulWidget {
   const TemplateEditorScreen({super.key});
@@ -46,11 +47,7 @@ class _TemplateEditorScreenState extends State<TemplateEditorScreen> {
       }
     } catch (e) {
       debugPrint('Error loading template data: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error loading data: $e')),
-        );
-      }
+      if (mounted) showError(context, e, prefix: 'Failed to load');
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -103,6 +100,35 @@ class _TemplateEditorScreenState extends State<TemplateEditorScreen> {
         ],
       ),
     );
+  }
+
+  Future<void> _reorderSection(TemplateSection section, int delta) async {
+    final currentIndex = _sections.indexWhere((s) => s.id == section.id);
+    final newIndex = currentIndex + delta;
+    if (newIndex < 0 || newIndex >= _sections.length) return;
+    final other = _sections[newIndex];
+    try {
+      await _client.from('template_sections').update({'position': other.position}).eq('id', section.id);
+      await _client.from('template_sections').update({'position': section.position}).eq('id', other.id);
+      await _loadData();
+    } catch (e) {
+      debugPrint('Error reordering section: $e');
+    }
+  }
+
+  Future<void> _reorderItem(TemplateItem item, int delta) async {
+    final items = _currentSectionItems;
+    final currentIndex = items.indexWhere((i) => i.id == item.id);
+    final newIndex = currentIndex + delta;
+    if (newIndex < 0 || newIndex >= items.length) return;
+    final other = items[newIndex];
+    try {
+      await _client.from('template_items').update({'position': other.position}).eq('id', item.id);
+      await _client.from('template_items').update({'position': item.position}).eq('id', other.id);
+      await _loadData();
+    } catch (e) {
+      debugPrint('Error reordering item: $e');
+    }
   }
 
   Future<void> _addItem() async {
@@ -203,105 +229,248 @@ class _TemplateEditorScreenState extends State<TemplateEditorScreen> {
   Widget build(BuildContext context) {
     if (_isLoading) return const Center(child: CircularProgressIndicator());
 
-    return Row(
-      children: [
-        // Left Pane: Sections
-        Expanded(
-          flex: 1,
-          child: Card(
-            margin: const EdgeInsets.all(16),
-            child: Column(
-              children: [
-                Padding(
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (constraints.maxWidth < 800) {
+          // Mobile Layout: Column with Dropdown for Sections
+          return Column(
+            children: [
+              // Section Selector
+              Card(
+                margin: const EdgeInsets.all(16),
+                child: Padding(
                   padding: const EdgeInsets.all(16.0),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      const Text('Sections', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                      IconButton(icon: const Icon(Icons.add), onPressed: _addSection),
-                    ],
-                  ),
-                ),
-                const Divider(height: 1),
-                Expanded(
-                  child: ListView.builder(
-                    itemCount: _sections.length,
-                    itemBuilder: (context, index) {
-                      final section = _sections[index];
-                      final isSelected = _selectedSection?.id == section.id;
-                      return ListTile(
-                        title: Text(section.nameEn),
-                        subtitle: Text(section.nameMs, style: const TextStyle(fontSize: 12, color: Colors.grey)),
-                        selected: isSelected,
-                        selectedTileColor: Theme.of(context).primaryColor.withOpacity(0.1),
-                        onTap: () => setState(() => _selectedSection = section),
-                        trailing: IconButton(
-                          icon: const Icon(Icons.delete_outline, size: 20),
-                          onPressed: () => _deleteSection(section.id),
-                        ),
-                      );
-                    },
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-        // Right Pane: Items
-        Expanded(
-          flex: 2,
-          child: Card(
-            margin: const EdgeInsets.only(top: 16, bottom: 16, right: 16),
-            child: Column(
-              children: [
-                Padding(
-                  padding: const EdgeInsets.all(16.0),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(
-                        _selectedSection != null ? 'Items in "${_selectedSection!.nameEn}"' : 'Select a Section',
-                        style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text('Section:', style: TextStyle(fontWeight: FontWeight.bold)),
+                          Row(
+                            children: [
+                              IconButton(
+                                icon: const Icon(Icons.add),
+                                onPressed: _addSection,
+                                tooltip: 'Add Section',
+                              ),
+                              if (_selectedSection != null)
+                                IconButton(
+                                  icon: const Icon(Icons.delete_outline, color: Colors.red),
+                                  onPressed: () => _deleteSection(_selectedSection!.id),
+                                  tooltip: 'Delete Section',
+                                ),
+                            ],
+                          ),
+                        ],
                       ),
-                      if (_selectedSection != null)
-                        IconButton(icon: const Icon(Icons.add), onPressed: _addItem),
+                      const SizedBox(height: 8),
+                      DropdownButton<int>(
+                        value: _selectedSection?.id,
+                        isExpanded: true,
+                        hint: const Text('Select a Section'),
+                        items: _sections.map((s) {
+                          return DropdownMenuItem(
+                            value: s.id,
+                            child: Text(s.nameEn),
+                          );
+                        }).toList(),
+                        onChanged: (val) {
+                          if (val != null) {
+                            setState(() {
+                              _selectedSection = _sections.firstWhere((s) => s.id == val);
+                            });
+                          }
+                        },
+                      ),
                     ],
                   ),
                 ),
-                const Divider(height: 1),
-                Expanded(
-                  child: _selectedSection == null
-                      ? const Center(child: Text('Select a section to view items'))
-                      : ListView.builder(
-                          itemCount: _currentSectionItems.length,
+              ),
+              // Items List
+              Expanded(
+                child: Card(
+                  margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                  child: Column(
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.all(16.0),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(
+                              _selectedSection != null ? 'Items' : '',
+                              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                            ),
+                            if (_selectedSection != null)
+                              IconButton(icon: const Icon(Icons.add), onPressed: _addItem),
+                          ],
+                        ),
+                      ),
+                      const Divider(height: 1),
+                      Expanded(
+                        child: _selectedSection == null
+                            ? const Center(child: Text('Select a section above'))
+                            : ListView.builder(
+                                itemCount: _currentSectionItems.length,
+                                itemBuilder: (context, index) {
+                                  final item = _currentSectionItems[index];
+                                  return ListTile(
+                                    title: Text(item.nameEn),
+                                    subtitle: Text(item.nameMs),
+                                    trailing: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        if (item.isCritical)
+                                          const Tooltip(message: 'Critical', child: Icon(Icons.warning, color: Colors.red, size: 16)),
+                                        if (item.requiresPhoto)
+                                          const Tooltip(message: 'Photo Required', child: Icon(Icons.camera_alt, color: Colors.blue, size: 16)),
+                                        const SizedBox(width: 8),
+                                        IconButton(
+                                          icon: const Icon(Icons.delete_outline, size: 20),
+                                          onPressed: () => _deleteItem(item.id),
+                                        ),
+                                      ],
+                                    ),
+                                  );
+                                },
+                              ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          );
+        } else {
+          // Desktop Layout: Split Pane
+          return Row(
+            children: [
+              // Left Pane: Sections
+              Expanded(
+                flex: 1,
+                child: Card(
+                  margin: const EdgeInsets.all(16),
+                  child: Column(
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.all(16.0),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            const Text('Sections', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                            IconButton(icon: const Icon(Icons.add), onPressed: _addSection),
+                          ],
+                        ),
+                      ),
+                      const Divider(height: 1),
+                      Expanded(
+                        child: ListView.builder(
+                          itemCount: _sections.length,
                           itemBuilder: (context, index) {
-                            final item = _currentSectionItems[index];
+                            final section = _sections[index];
+                            final isSelected = _selectedSection?.id == section.id;
                             return ListTile(
-                              title: Text(item.nameEn),
-                              subtitle: Text(item.nameMs),
+                              title: Text(section.nameEn),
+                              subtitle: Text(section.nameMs, style: const TextStyle(fontSize: 12, color: Colors.grey)),
+                              selected: isSelected,
+                              selectedTileColor: Theme.of(context).primaryColor.withOpacity(0.1),
+                              onTap: () => setState(() => _selectedSection = section),
                               trailing: Row(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
-                                  if (item.isCritical)
-                                    const Tooltip(message: 'Critical', child: Icon(Icons.warning, color: Colors.red, size: 16)),
-                                  if (item.requiresPhoto)
-                                    const Tooltip(message: 'Photo Required', child: Icon(Icons.camera_alt, color: Colors.blue, size: 16)),
-                                  const SizedBox(width: 8),
+                                  IconButton(
+                                    icon: const Icon(Icons.arrow_upward, size: 18),
+                                    tooltip: 'Move Up',
+                                    onPressed: () => _reorderSection(section, -1),
+                                  ),
+                                  IconButton(
+                                    icon: const Icon(Icons.arrow_downward, size: 18),
+                                    tooltip: 'Move Down',
+                                    onPressed: () => _reorderSection(section, 1),
+                                  ),
                                   IconButton(
                                     icon: const Icon(Icons.delete_outline, size: 20),
-                                    onPressed: () => _deleteItem(item.id),
+                                    onPressed: () => _deleteSection(section.id),
                                   ),
                                 ],
                               ),
                             );
                           },
                         ),
+                      ),
+                    ],
+                  ),
                 ),
-              ],
-            ),
-          ),
-        ),
-      ],
+              ),
+              // Right Pane: Items
+              Expanded(
+                flex: 2,
+                child: Card(
+                  margin: const EdgeInsets.only(top: 16, bottom: 16, right: 16),
+                  child: Column(
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.all(16.0),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(
+                              _selectedSection != null ? 'Items in "${_selectedSection!.nameEn}"' : 'Select a Section',
+                              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                            ),
+                            if (_selectedSection != null)
+                              IconButton(icon: const Icon(Icons.add), onPressed: _addItem),
+                          ],
+                        ),
+                      ),
+                      const Divider(height: 1),
+                      Expanded(
+                        child: _selectedSection == null
+                            ? const Center(child: Text('Select a section to view items'))
+                            : ListView.builder(
+                                itemCount: _currentSectionItems.length,
+                                itemBuilder: (context, index) {
+                                  final item = _currentSectionItems[index];
+                                  return ListTile(
+                                    title: Text(item.nameEn),
+                                    subtitle: Text(item.nameMs),
+                                    trailing: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        IconButton(
+                                          icon: const Icon(Icons.arrow_upward, size: 18),
+                                          tooltip: 'Move Up',
+                                          onPressed: () => _reorderItem(item, -1),
+                                        ),
+                                        IconButton(
+                                          icon: const Icon(Icons.arrow_downward, size: 18),
+                                          tooltip: 'Move Down',
+                                          onPressed: () => _reorderItem(item, 1),
+                                        ),
+                                        if (item.isCritical)
+                                          const Tooltip(message: 'Critical', child: Icon(Icons.warning, color: Colors.red, size: 16)),
+                                        if (item.requiresPhoto)
+                                          const Tooltip(message: 'Photo Required', child: Icon(Icons.camera_alt, color: Colors.blue, size: 16)),
+                                        const SizedBox(width: 8),
+                                        IconButton(
+                                          icon: const Icon(Icons.delete_outline, size: 20),
+                                          onPressed: () => _deleteItem(item.id),
+                                        ),
+                                      ],
+                                    ),
+                                  );
+                                },
+                              ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          );
+        }
+      },
     );
   }
 }

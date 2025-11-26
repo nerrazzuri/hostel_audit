@@ -9,19 +9,40 @@ import 'package:printing/printing.dart';
 import 'package:pdf/pdf.dart';
 
 class AuditFormScreen extends StatefulWidget {
-  const AuditFormScreen({super.key});
+  final String? hostelId;
+  final String? unitId;
+  final String? initialHostelName;
+  final String? initialUnitName;
+  final String? initialEmployerName;
+
+  const AuditFormScreen({
+    super.key,
+    this.hostelId,
+    this.unitId,
+    this.initialHostelName,
+    this.initialUnitName,
+    this.initialEmployerName,
+  });
 
   @override
   State<AuditFormScreen> createState() => _AuditFormScreenState();
 }
 
 class _AuditFormScreenState extends State<AuditFormScreen> {
-  final _hostelController = TextEditingController();
-  final _employerController = TextEditingController();
-  final _headcountController = TextEditingController();
+  late TextEditingController _hostelController;
+  late TextEditingController _unitController;
+  late TextEditingController _employerController;
   bool _showMalay = false;
   int _currentSectionIndex = 0;
   bool _pdfGenerated = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _hostelController = TextEditingController(text: widget.initialHostelName ?? '');
+    _unitController = TextEditingController(text: widget.initialUnitName ?? '');
+    _employerController = TextEditingController(text: widget.initialEmployerName ?? '');
+  }
 
   bool _isSectionComplete(AuditSection section) {
     return section.items.every((i) => i.status != ItemStatus.missing);
@@ -34,8 +55,8 @@ class _AuditFormScreenState extends State<AuditFormScreen> {
   @override
   void dispose() {
     _hostelController.dispose();
+    _unitController.dispose();
     _employerController.dispose();
-    _headcountController.dispose();
     super.dispose();
   }
 
@@ -46,18 +67,36 @@ class _AuditFormScreenState extends State<AuditFormScreen> {
         final audit = provider.currentAudit;
         if (audit == null) return const Scaffold(body: Center(child: CircularProgressIndicator()));
 
-        // Keep the text field in sync with provider (e.g., when coming from Hostels tab)
-        if (_hostelController.text != audit.hostelName) {
-          _hostelController.text = audit.hostelName;
-        }
-        if (_employerController.text != audit.employerName) {
-          _employerController.text = audit.employerName;
-        }
-        if (_headcountController.text != audit.headcount.toString() && audit.headcount != 0) {
-          _headcountController.text = audit.headcount.toString();
+        // Sync if provider has different values (e.g. from load)
+        if (audit.hostelName.isNotEmpty && _hostelController.text != audit.hostelName) {
+           // Only override if user hasn't typed? Or just trust provider?
+           // For new audit, provider is initialized with passed values.
         }
 
-        return Scaffold(
+        // Ensure unit controller is synced if initial was null but provider has it (e.g. loaded audit)
+        if (_unitController.text.isEmpty && audit.unitName.isNotEmpty) {
+          _unitController.text = audit.unitName;
+        }
+        
+        Future<bool> _confirmLeave() async {
+          if (!provider.hasUnsyncedChanges) return true;
+          final ok = await showDialog<bool>(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: const Text('Unsynced changes'),
+              content: const Text('You have unsynced changes that will be lost. Do you want to leave?'),
+              actions: [
+                TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Stay')),
+                ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Leave')),
+              ],
+            ),
+          );
+          return ok == true;
+        }
+
+        return WillPopScope(
+          onWillPop: _confirmLeave,
+          child: Scaffold(
           appBar: AppBar(
             title: Text(audit.hostelName.isNotEmpty ? '${audit.hostelName} Audit' : 'New Audit'),
             actions: [
@@ -72,23 +111,31 @@ class _AuditFormScreenState extends State<AuditFormScreen> {
                 tooltip: 'Clear all info',
                 icon: const Icon(Icons.delete_outline),
                 onPressed: () async {
-                  final confirm = await showDialog<bool>(
-                    context: context,
-                    builder: (ctx) => AlertDialog(
-                      title: const Text('Clear all information?'),
-                      content: const Text('This will reset all categories and items.'),
-                      actions: [
-                        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-                        ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Clear')),
-                      ],
-                    ),
-                  );
-                  if (confirm == true) {
+                  if (!provider.hasUnsyncedChanges) {
                     provider.startNewAudit();
                     _pdfGenerated = false;
                     _hostelController.text = '';
+                    _unitController.text = '';
                     _employerController.text = '';
-                    _headcountController.text = '';
+                  } else {
+                    final confirm = await showDialog<bool>(
+                      context: context,
+                      builder: (ctx) => AlertDialog(
+                        title: const Text('Unsynced changes'),
+                        content: const Text('You have unsynced changes. Clear and lose all progress?'),
+                        actions: [
+                          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+                          ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Clear')),
+                        ],
+                      ),
+                    );
+                    if (confirm == true) {
+                      provider.startNewAudit();
+                      _pdfGenerated = false;
+                      _hostelController.text = '';
+                      _unitController.text = '';
+                      _employerController.text = '';
+                    }
                   }
                 },
               ),
@@ -115,7 +162,8 @@ class _AuditFormScreenState extends State<AuditFormScreen> {
               ),
             ),
           ),
-          body: Column(
+          body: SingleChildScrollView(
+            child: Column(
             children: [
               Padding(
                 padding: const EdgeInsets.all(16.0),
@@ -123,31 +171,22 @@ class _AuditFormScreenState extends State<AuditFormScreen> {
                   children: [
                     TextField(
                       controller: _hostelController,
-                      decoration: const InputDecoration(labelText: 'Hostel Name/Unit'),
+                      decoration: const InputDecoration(labelText: 'Hostel Name'),
+                      readOnly: true, // Lock hostel name to prevent accidental edits
                       onChanged: (val) => provider.updateHostelName(val),
                     ),
                     const SizedBox(height: 12),
-                    Row(
-                      children: [
-                        Expanded(
-                          flex: 2,
-                          child: TextField(
-                            controller: _employerController,
-                            decoration: const InputDecoration(labelText: 'Employer Name'),
-                            onChanged: (val) => provider.updateEmployerInfo(val, int.tryParse(_headcountController.text) ?? 0),
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          flex: 1,
-                          child: TextField(
-                            controller: _headcountController,
-                            decoration: const InputDecoration(labelText: 'Headcount'),
-                            keyboardType: TextInputType.number,
-                            onChanged: (val) => provider.updateEmployerInfo(_employerController.text, int.tryParse(val) ?? 0),
-                          ),
-                        ),
-                      ],
+                    TextField(
+                      controller: _unitController,
+                      decoration: const InputDecoration(labelText: 'Unit Name / Number'),
+                      readOnly: true, // Lock unit name as well
+                      onChanged: (val) {}, // No update method for unit name yet, but it's read-only
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: _employerController,
+                      decoration: const InputDecoration(labelText: 'Employer Name'),
+                      onChanged: (val) => provider.updateEmployerInfo(val, 0),
                     ),
                     const SizedBox(height: 12),
                     SwitchListTile.adaptive(
@@ -185,47 +224,41 @@ class _AuditFormScreenState extends State<AuditFormScreen> {
                   ],
                 ),
               ),
-              Expanded(
-                child: ListView(
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            audit.sections[_currentSectionIndex].nameEn,
-                            style: const TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.bold,
-                              color: Colors.black87,
-                            ),
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            audit.sections[_currentSectionIndex].nameMs,
-                            style: const TextStyle(
-                              fontSize: 14,
-                              color: Colors.black54,
-                            ),
-                          ),
-                        ],
+                    Text(
+                      audit.sections[_currentSectionIndex].nameEn,
+                      style: const TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.black87,
                       ),
                     ),
-                    ...audit.sections[_currentSectionIndex].items.asMap().entries.map((itemEntry) {
-                    final itemIndex = itemEntry.key;
-                    final item = itemEntry.value;
-                    return ChecklistItemTile(
-                      item: item,
-                      showMalay: _showMalay,
-                      onChanged: (newItem) async {
-                        provider.updateItem(audit.sections[_currentSectionIndex].nameEn, itemIndex, newItem);
-                      },
-                    );
-                  }),
+                    const SizedBox(height: 2),
+                    Text(
+                      audit.sections[_currentSectionIndex].nameMs,
+                      style: const TextStyle(
+                        fontSize: 14,
+                        color: Colors.black54,
+                      ),
+                    ),
                   ],
                 ),
               ),
+              ...audit.sections[_currentSectionIndex].items.asMap().entries.map((itemEntry) {
+                final itemIndex = itemEntry.key;
+                final item = itemEntry.value;
+                return ChecklistItemTile(
+                  item: item,
+                  showMalay: _showMalay,
+                  onChanged: (newItem) async {
+                    provider.updateItem(audit.sections[_currentSectionIndex].nameEn, itemIndex, newItem);
+                  },
+                );
+              }),
               SafeArea(
                 top: false,
                 child: Container(
@@ -254,15 +287,14 @@ class _AuditFormScreenState extends State<AuditFormScreen> {
                           onPressed: enabled
                               ? () async {
                                   provider.updateHostelName(_hostelController.text);
-                                  provider.updateEmployerInfo(_employerController.text, int.tryParse(_headcountController.text) ?? 0);
+                                  provider.updateEmployerInfo(_employerController.text, 0);
                                   
                                   // Validation
                                   if (_hostelController.text.trim().isEmpty || 
-                                      _employerController.text.trim().isEmpty || 
-                                      _headcountController.text.trim().isEmpty) {
+                                      _employerController.text.trim().isEmpty) {
                                     ScaffoldMessenger.of(context).showSnackBar(
                                       const SnackBar(
-                                        content: Text('Please fill in Hostel Name, Employer Name, and Headcount before proceeding.'),
+                                        content: Text('Please fill in Hostel Name and Employer Name before proceeding.'),
                                         backgroundColor: Colors.red,
                                       ),
                                     );
@@ -294,6 +326,8 @@ class _AuditFormScreenState extends State<AuditFormScreen> {
               ),
             ],
           ),
+          ),
+        ),
         );
       },
     );

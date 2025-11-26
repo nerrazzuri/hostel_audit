@@ -1,12 +1,21 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:provider/single_child_widget.dart';
 import 'providers/audit_provider.dart';
-import 'repositories/audit_repository.dart';
 import 'repositories/supabase_audit_repository.dart';
+import 'repositories/local_audit_repository.dart';
+import 'services/sync_service.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'screens/home_screen.dart';
 import 'screens/main_shell.dart';
 import 'screens/auth/auth_gate.dart';
 import 'services/supabase_service.dart';
+import 'services/database_helper.dart';
+import 'services/crash_reporting_service.dart';
+import 'firebase_options.dart';
+import 'package:firebase_core/firebase_core.dart';
+
+import 'repositories/audit_repository.dart';
 
 // Professional theme colors
 const MaterialColor trustBlue = MaterialColor(
@@ -24,11 +33,22 @@ const MaterialColor trustBlue = MaterialColor(
     900: Color(0xFF004AAD),
   },
 );
+
 const Color actionGreen = Color(0xFF4CAF50);
 const Color lightBackground = Color(0xFFF9F9F9);
 
-void main() {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  const enableFirebase = bool.fromEnvironment('ENABLE_FIREBASE', defaultValue: false);
+  if (enableFirebase) {
+    try {
+      await Firebase.initializeApp(
+        options: DefaultFirebaseOptions.currentPlatform,
+      );
+    } catch (_) {
+      // Ignore if Firebase is not configured for this build
+    }
+  }
   runApp(const HostelAuditApp());
 }
 
@@ -37,6 +57,14 @@ class HostelAuditApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    String _safeUid() {
+      try {
+        return Supabase.instance.client.auth.currentUser?.id ?? 'offline_user';
+      } catch (_) {
+        return 'offline_user';
+      }
+    }
+
     return FutureBuilder<bool>(
       future: SupabaseService.initialize(),
       builder: (context, snapshot) {
@@ -44,16 +72,38 @@ class HostelAuditApp extends StatelessWidget {
           return const MaterialApp(home: Scaffold(body: Center(child: CircularProgressIndicator())));
         }
         final useSupabase = snapshot.data == true;
-        final repo = useSupabase ? SupabaseAuditRepository() : LocalAuditRepository();
-        return MultiProvider(
-          providers: [
-            Provider<AuditRepository>(create: (_) => repo),
-            ChangeNotifierProvider<AuditProvider>(
-              create: (context) => AuditProvider(context.read<AuditRepository>()),
+        
+        final providers = <SingleChildWidget>[];
+        if (useSupabase) {
+          providers.addAll([
+            Provider<SupabaseAuditRepository>(create: (_) => SupabaseAuditRepository()),
+            // Cloud first: use Supabase repository directly for saves/loads
+            ProxyProvider<SupabaseAuditRepository, AuditRepository>(
+              update: (_, cloudRepo, __) => cloudRepo,
             ),
-          ],
+            // Keep SyncService available for future offline sync if needed
+            ProxyProvider<SupabaseAuditRepository, SyncService>(
+              update: (_, cloudRepo, __) => SyncService(
+                LocalAuditRepository(_safeUid()),
+                cloudRepo,
+              ),
+            ),
+            ChangeNotifierProxyProvider2<AuditRepository, SyncService, AuditProvider>(
+              create: (context) => AuditProvider(context.read<AuditRepository>(), context.read<SyncService>()),
+              update: (context, repo, sync, previous) => AuditProvider(repo, sync),
+            ),
+          ]);
+        } else {
+          providers.addAll([
+            Provider<AuditRepository>(create: (_) => LocalAuditRepository(_safeUid())),
+            ChangeNotifierProvider<AuditProvider>(create: (context) => AuditProvider(context.read<AuditRepository>())),
+          ]);
+        }
+
+        return MultiProvider(
+          providers: providers,
           child: MaterialApp(
-            title: 'Hostel Audit',
+            title: 'NHMS',
             debugShowCheckedModeBanner: false,
             theme: ThemeData(
               primarySwatch: trustBlue,

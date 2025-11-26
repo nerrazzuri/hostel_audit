@@ -1,18 +1,28 @@
 import 'dart:io';
+import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:intl/intl.dart';
-import '../models/checklist_model.dart';
 import 'package:printing/printing.dart';
+import 'package:image/image.dart' as img;
+import '../models/checklist_model.dart';
+import '../utils/time.dart';
+
+// Data class to pass to Isolate
+class PdfGenerationParams {
+  final Audit audit;
+  final Map<String, Uint8List> networkImages;
+
+  PdfGenerationParams(this.audit, this.networkImages);
+}
 
 class PdfService {
   static Future<Uint8List> generateAuditPdf(Audit audit) async {
-    final pdf = pw.Document();
-    final dateFormat = DateFormat('dd MMM yyyy');
-
-    // Pre-fetch network images
-    final Map<String, pw.ImageProvider> netImages = {};
+    // 1. Pre-fetch network images on Main Isolate
+    // (Isolates can't easily do network calls without setup, and we want to reuse app's network context if any)
+    final Map<String, Uint8List> netImages = {};
     final allImagePaths = audit.sections
         .expand((s) => s.items)
         .expand((i) => i.imagePaths)
@@ -21,11 +31,31 @@ class PdfService {
 
     for (final path in allImagePaths) {
       try {
-        netImages[path] = await networkImage(path);
+        final provider = await networkImage(path);
+        // We need bytes. networkImage returns ImageProvider.
+        // Actually, printing's networkImage is a convenience for PDF.
+        // For Isolate, we need raw bytes.
+        // Let's use a simple http get or just skip optimization for network images for now?
+        // Or better: Download them here.
+        // Since we don't have 'http' package explicitly imported here, let's try to use NetworkAssetBundle.
+        final bundle = NetworkAssetBundle(Uri.parse(path));
+        final data = await bundle.load("");
+        netImages[path] = data.buffer.asUint8List();
       } catch (e) {
-        // Ignore failed image loads
+        debugPrint('Failed to load network image for PDF: $e');
       }
     }
+
+    // 2. Run PDF generation in background Isolate
+    return await compute(_generatePdfIsolate, PdfGenerationParams(audit, netImages));
+  }
+
+  // This function runs in a separate Isolate
+  static Future<Uint8List> _generatePdfIsolate(PdfGenerationParams params) async {
+    final audit = params.audit;
+    final netImages = params.networkImages;
+    final pdf = pw.Document();
+    final dateFormat = DateFormat('dd MMM yyyy HH:mm');
 
     pdf.addPage(
       pw.MultiPage(
@@ -62,13 +92,15 @@ class PdfService {
               crossAxisAlignment: pw.CrossAxisAlignment.start,
               children: [
                 pw.Text('Hostel: ${audit.hostelName}'),
+                if (audit.unitName.isNotEmpty)
+                  pw.Text('Unit: ${audit.unitName}'),
                 pw.Text('Employer: ${audit.employerName}'),
               ],
             ),
             pw.Column(
               crossAxisAlignment: pw.CrossAxisAlignment.end,
               children: [
-                pw.Text('Date: ${dateFormat.format(audit.date)}'),
+                pw.Text('Date: ${dateFormat.format(toUtc8(audit.date))} (UTC+8)'),
                 pw.Text('Headcount: ${audit.headcount}'),
               ],
             ),
@@ -79,7 +111,7 @@ class PdfService {
     );
   }
 
-  static pw.Widget _buildSection(AuditSection section, Map<String, pw.ImageProvider> netImages) {
+  static pw.Widget _buildSection(AuditSection section, Map<String, Uint8List> netImages) {
     return pw.Column(
       crossAxisAlignment: pw.CrossAxisAlignment.start,
       children: [
@@ -88,7 +120,6 @@ class PdfService {
           section.nameEn,
           style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold, color: PdfColors.blue900),
         ),
-        // Show Malay label beneath English for clarity in PDF
         if (section.nameMs.isNotEmpty)
           pw.Text(section.nameMs, style: const pw.TextStyle(fontSize: 12)),
         pw.SizedBox(height: 5),
@@ -113,7 +144,6 @@ class PdfService {
             ];
           }).toList(),
         ),
-        // Add images table for this section if any
         if (section.items.any((i) => i.imagePaths.isNotEmpty)) ...[
           pw.SizedBox(height: 10),
           pw.Text('Photos:', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 10)),
@@ -121,7 +151,6 @@ class PdfService {
           pw.Table(
             border: pw.TableBorder.all(color: PdfColors.grey300),
             children: [
-              // Header
               pw.TableRow(
                 decoration: const pw.BoxDecoration(color: PdfColors.grey100),
                 children: [
@@ -135,7 +164,6 @@ class PdfService {
                   ),
                 ],
               ),
-              // Rows
               ...section.items.where((i) => i.imagePaths.isNotEmpty).map((item) {
                 return pw.TableRow(
                   children: [
@@ -151,18 +179,17 @@ class PdfService {
                         children: item.imagePaths.map((path) {
                           // Handle network images
                           if (path.startsWith('http')) {
-                            final provider = netImages[path];
-                            if (provider != null) {
+                            final bytes = netImages[path];
+                            if (bytes != null) {
                               return pw.Container(
                                 height: 80,
                                 width: 80,
                                 child: pw.Image(
-                                  provider,
+                                  pw.MemoryImage(bytes),
                                   fit: pw.BoxFit.cover,
                                 ),
                               );
                             }
-                            // Fallback if load failed
                             return pw.Container(
                               width: 80,
                               height: 80,
@@ -171,17 +198,30 @@ class PdfService {
                             );
                           }
                           
+                          // Handle local images with resizing
                           try {
                             final file = File(path);
                             if (file.existsSync()) {
-                              return pw.Container(
-                                height: 80, // Fixed height as requested
-                                width: 80,
-                                child: pw.Image(
-                                  pw.MemoryImage(file.readAsBytesSync()),
-                                  fit: pw.BoxFit.cover,
-                                ),
-                              );
+                              // Read bytes
+                              final bytes = file.readAsBytesSync();
+                              
+                              // Resize image to save memory
+                              // Decode image
+                              final image = img.decodeImage(bytes);
+                              if (image != null) {
+                                // Resize to max width 800 (sufficient for PDF thumbnail)
+                                final resized = img.copyResize(image, width: 800);
+                                final compressedBytes = Uint8List.fromList(img.encodeJpg(resized, quality: 70));
+                                
+                                return pw.Container(
+                                  height: 80,
+                                  width: 80,
+                                  child: pw.Image(
+                                    pw.MemoryImage(compressedBytes),
+                                    fit: pw.BoxFit.cover,
+                                  ),
+                                );
+                              }
                             }
                           } catch (_) {}
                           return pw.SizedBox();

@@ -1,17 +1,29 @@
+import 'dart:io';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class SupabaseService {
-  // Use literal values (the previous fromEnvironment usage was incorrect).
-  // If you want to move back to dart-define, change these to String.fromEnvironment('SUPABASE_URL') etc.
-  static const String supabaseUrl = 'https://zlnxuasjjvhobepyeiuy.supabase.co';
-  static const String supabaseAnonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inpsbnh1YXNqanZob2JlcHllaXV5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjM3MzkyNTcsImV4cCI6MjA3OTMxNTI1N30.6kDxaNGlDjdx_CFnDVuie4i8pNqgAg57M8gV0XODIdQ';
+  // Read at build time (flutter --dart-define) with runtime env fallback for dev shells
+  static const String _definedUrl = String.fromEnvironment('SUPABASE_URL', defaultValue: '');
+  static const String _definedAnon = String.fromEnvironment('SUPABASE_ANON_KEY', defaultValue: '');
 
   static Future<bool> initialize() async {
-    if (supabaseUrl.isEmpty || supabaseAnonKey.isEmpty) {
+    // Avoid starting background timers (auto-refresh) during widget tests
+    try {
+      if (Platform.environment.containsKey('FLUTTER_TEST')) {
+        return false;
+      }
+    } catch (_) {
+      // Platform may not be available; ignore and proceed
+    }
+
+    final url = _definedUrl.isNotEmpty ? _definedUrl : (Platform.environment['SUPABASE_URL'] ?? '');
+    final anon = _definedAnon.isNotEmpty ? _definedAnon : (Platform.environment['SUPABASE_ANON_KEY'] ?? '');
+
+    if (url.isEmpty || anon.isEmpty) {
       return false;
     }
     try {
-      await Supabase.initialize(url: supabaseUrl, anonKey: supabaseAnonKey);
+      await Supabase.initialize(url: url, anonKey: anon);
       return true;
     } catch (_) {
       return false;
