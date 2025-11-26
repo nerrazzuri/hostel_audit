@@ -86,6 +86,7 @@ flutter:
   assets:
     - assets/logo.png
     - assets/logo.jpg
+    - env/dev.json
 
 flutter_launcher_icons:
   android: true

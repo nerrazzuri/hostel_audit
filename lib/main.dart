@@ -14,6 +14,9 @@ import 'services/database_helper.dart';
 import 'services/crash_reporting_service.dart';
 import 'firebase_options.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:flutter/foundation.dart';
+import 'services/env_service.dart';
+import 'firebase_options.dart';
 
 import 'repositories/audit_repository.dart';
 
@@ -39,12 +42,13 @@ const Color lightBackground = Color(0xFFF9F9F9);
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  const enableFirebase = bool.fromEnvironment('ENABLE_FIREBASE', defaultValue: false);
+  await EnvService.load();
+  const enableFirebaseDefine = bool.fromEnvironment('ENABLE_FIREBASE', defaultValue: false);
+  final enableFirebase = EnvService.getBool('ENABLE_FIREBASE') ?? enableFirebaseDefine;
   if (enableFirebase) {
     try {
-      await Firebase.initializeApp(
-        options: DefaultFirebaseOptions.currentPlatform,
-      );
+      final options = _firebaseOptionsFromEnv() ?? DefaultFirebaseOptions.currentPlatform;
+      await Firebase.initializeApp(options: options);
     } catch (_) {
       // Ignore if Firebase is not configured for this build
     }
@@ -133,4 +137,70 @@ class HostelAuditApp extends StatelessWidget {
       },
     );
   }
+}
+
+FirebaseOptions? _firebaseOptionsFromEnv() {
+  final fb = EnvService.getMap('firebase') ?? EnvService.getMap('FIREBASE');
+  if (fb == null) return null;
+  Map<String, dynamic>? platform;
+  if (kIsWeb) {
+    platform = fb['web'] as Map<String, dynamic>?;
+  } else {
+    switch (defaultTargetPlatform) {
+      case TargetPlatform.android:
+        platform = fb['android'] as Map<String, dynamic>?;
+        break;
+      case TargetPlatform.iOS:
+        platform = fb['ios'] as Map<String, dynamic>?;
+        break;
+      case TargetPlatform.macOS:
+        platform = fb['macos'] as Map<String, dynamic>? ?? fb['ios'] as Map<String, dynamic>?;
+        break;
+      case TargetPlatform.windows:
+        platform = fb['windows'] as Map<String, dynamic>? ?? fb['web'] as Map<String, dynamic>?;
+        break;
+      case TargetPlatform.linux:
+        platform = null;
+        break;
+      default:
+        platform = null;
+    }
+  }
+  if (platform == null) return null;
+  String? s(String key) => platform![key] as String?;
+  try {
+    if (kIsWeb || defaultTargetPlatform == TargetPlatform.windows) {
+      return FirebaseOptions(
+        apiKey: s('apiKey') ?? '',
+        appId: s('appId') ?? '',
+        messagingSenderId: s('messagingSenderId') ?? '',
+        projectId: s('projectId') ?? '',
+        authDomain: s('authDomain'),
+        storageBucket: s('storageBucket'),
+        measurementId: s('measurementId'),
+      );
+    }
+    if (defaultTargetPlatform == TargetPlatform.android) {
+      return FirebaseOptions(
+        apiKey: s('apiKey') ?? '',
+        appId: s('appId') ?? '',
+        messagingSenderId: s('messagingSenderId') ?? '',
+        projectId: s('projectId') ?? '',
+        storageBucket: s('storageBucket'),
+      );
+    }
+    if (defaultTargetPlatform == TargetPlatform.iOS || defaultTargetPlatform == TargetPlatform.macOS) {
+      return FirebaseOptions(
+        apiKey: s('apiKey') ?? '',
+        appId: s('appId') ?? '',
+        messagingSenderId: s('messagingSenderId') ?? '',
+        projectId: s('projectId') ?? '',
+        storageBucket: s('storageBucket'),
+        iosBundleId: s('iosBundleId'),
+      );
+    }
+  } catch (_) {
+    return null;
+  }
+  return null;
 }
